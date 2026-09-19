@@ -1,15 +1,50 @@
 services:
   soonsim-detector:
+    image: soonsim-detector:latest
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
     container_name: soonsim-detector
     restart: unless-stopped
+    network_mode: "host"
+    command: ["uv", "run", "python", "-m", "src.main", "--no-dashboard"]
     volumes:
       - ./config/config.toml:/app/config/config.toml:ro
       - ./records:/app/records:rw
     environment:
       - PYTHONUNBUFFERED=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  soonsim-viewer:
+    image: soonsim-detector:latest
+    container_name: soonsim-viewer
+    restart: unless-stopped
+    network_mode: "host"
+    command: ["uv", "run", "python", "-m", "src.viewer.app", "--port", "8080"]
+    volumes:
+      - ./config/config.toml:/app/config/config.toml:ro
+      - ./records:/app/records:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: soonsim-tunnel
+    restart: unless-stopped
+    network_mode: "host"
+    command: tunnel --no-autoupdate --protocol http2 --url http://127.0.0.1:8080
+    depends_on:
+      - soonsim-viewer
     logging:
       driver: "json-file"
       options:

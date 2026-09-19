@@ -16,9 +16,10 @@ WORKDIR /app
 COPY pyproject.toml uv.lock* ./
 RUN uv sync --frozen --no-dev || uv sync --no-dev
 
-# Copy source code and scripts
+# Copy source code and model weights
 COPY src/ ./src/
 COPY models/ ./models/
+COPY yolov8n.pt* ./
 COPY config/config.example.toml ./config/config.example.toml
 
 # Create records directory

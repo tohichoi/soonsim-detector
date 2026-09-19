@@ -293,7 +293,13 @@ HTML_TEMPLATE = """
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="순심이">
+    <meta name="theme-color" content="#0b1120">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230b1120' stroke='%2322c55e' stroke-width='4'/%3E%3Cpath d='M30 40 Q20 25 35 25 Q45 25 40 40 Z' fill='%23f8fafc'/%3E%3Cpath d='M70 40 Q80 25 65 25 Q55 25 60 40 Z' fill='%23f8fafc'/%3E%3Cellipse cx='50' cy='55' rx='28' ry='22' fill='%23f8fafc'/%3E%3Ccircle cx='40' cy='52' r='4' fill='%230f172a'/%3E%3Ccircle cx='60' cy='52' r='4' fill='%230f172a'/%3E%3Cellipse cx='50' cy='62' rx='6' ry='4' fill='%23f43f5e'/%3E%3Ccircle cx='78' cy='22' r='10' fill='%2322c55e'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230b1120' stroke='%2322c55e' stroke-width='4'/%3E%3Cpath d='M30 40 Q20 25 35 25 Q45 25 40 40 Z' fill='%23f8fafc'/%3E%3Cpath d='M70 40 Q80 25 65 25 Q55 25 60 40 Z' fill='%23f8fafc'/%3E%3Cellipse cx='50' cy='55' rx='28' ry='22' fill='%23f8fafc'/%3E%3Ccircle cx='40' cy='52' r='4' fill='%230f172a'/%3E%3Ccircle cx='60' cy='52' r='4' fill='%230f172a'/%3E%3Cellipse cx='50' cy='62' rx='6' ry='4' fill='%23f43f5e'/%3E%3Ccircle cx='78' cy='22' r='10' fill='%2322c55e'/%3E%3C/svg%3E">
     <title>순심이 실시간 감시 뷰어 (30분 스마트 큐)</title>
     <style>
         :root {
@@ -306,12 +312,12 @@ HTML_TEMPLATE = """
             --warning: #f59e0b;
             --border: #334155;
         }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             background-color: var(--bg-color);
             color: var(--text-color);
-            padding: 20px;
+            padding: 16px;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -325,6 +331,8 @@ HTML_TEMPLATE = """
             margin-bottom: 16px;
             border-bottom: 1px solid var(--border);
             padding-bottom: 14px;
+            flex-wrap: wrap;
+            gap: 12px;
         }
         .title-group {
             display: flex;
@@ -797,7 +805,7 @@ def main():
     print(f" Soonsim Detector 30-Min Smart Live Viewer Started!")
     print(f" URL: http://localhost:{port}")
     print(f"==================================================================\n")
-    uvicorn.run("src.viewer.app:app", host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
 if __name__ == "__main__":
