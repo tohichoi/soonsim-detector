@@ -22,7 +22,7 @@
   - 텔레그램 봇 API(`sendVideo`) 비동기 전송.
 - 관제 및 뷰어:
   - Rich 기반 실시간 상태 콘솔 대시보드 및 Loguru 로깅.
-  - PIN 보안 잠금 화면(PIN 1290) 및 HttpOnly 세션 쿠키 인증.
+  - PIN 보안 잠금 화면 및 HttpOnly 세션 쿠키 인증.
   - 5초 주기 스냅샷 캔버스 오버레이, 5분(60개) 롤링 큐, 녹화 영상 브라우징, Web Audio 강아지 소리 알림 FastAPI 웹 뷰어.
   - ngrok 영구 정적 도메인(`blend-replay-canary.ngrok-free.dev`) 기반 외부 HTTPS 관제.
 
@@ -51,5 +51,5 @@
 - [x] 마일스톤 4: 5초 주기 캡처 & 5분 롤링 큐 & 실시간 사운드 웹 뷰어 UI 구축.
 - [x] 마일스톤 5: Pytest 단위/통합 테스트 전원 통과(14/14) 및 Docker 컨테이너 사전 검증 완료.
 - [x] 마일스톤 6: 모션 게이팅 CPU 최적화(평상시 CPU 1% 미만) 및 배변판 ROI 전용 감시 고도화.
-- [x] 마일스톤 7: 웹 뷰어 PIN(1290) 보안 잠금 화면 및 세션 인증 체계 구축.
+- [x] 마일스톤 7: 웹 뷰어 PIN 보안 잠금 화면 및 세션 인증 체계 구축.
 - [x] 마일스톤 8: Synology NAS DS923+ 실서버 다중 컨테이너 배포 및 ngrok 영구 고정 도메인(`blend-replay-canary.ngrok-free.dev`) 외부 관제 연동 완료.
