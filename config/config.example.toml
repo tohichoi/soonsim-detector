@@ -16,10 +16,15 @@ polygon = [
 
 [detector]
 model_name = "yolov8n.pt"
-confidence_threshold = 0.45
+confidence_threshold = 0.30
 dog_class_id = 16
-track_thresh = 0.25
+track_thresh = 0.20
 match_thresh = 0.8
+inference_interval_frames = 5
+motion_gate_enabled = true
+motion_threshold = 4.0
+failsafe_interval_sec = 30.0
+max_threads = 2
 
 [recorder]
 pre_buffer_sec = 5

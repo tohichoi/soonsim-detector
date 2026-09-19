@@ -9,14 +9,17 @@ import threading
 import time
 from loguru import logger
 from rich.live import Live
+import supervision as sv
 from src.capture.stream import RingBuffer, VideoStreamReader
 from src.cli.dashboard import Dashboard
 from src.config import load_config
 from src.detector.model import DogDetector
+from src.detector.motion_gate import MotionGate
 from src.detector.zone_tracker import CompletedEvent, EventStatus, ZoneTracker
 from src.notifier.telegram import TelegramNotifier
 from src.recorder.annotator import HighContrastAnnotator
 from src.recorder.exporter import VideoClipExporter
+from src.utils.telemetry import InferenceTelemetry
 
 
 class SoonsimService:
@@ -40,7 +43,16 @@ class SoonsimService:
             model_name=self.config.detector.model_name,
             confidence_threshold=self.config.detector.confidence_threshold,
             class_ids=[15, 16],  # COCO cat (15) and dog (16)
+            max_threads=self.config.detector.max_threads,
         )
+
+        self.motion_gate = MotionGate(
+            motion_threshold=self.config.detector.motion_threshold,
+            failsafe_interval_sec=self.config.detector.failsafe_interval_sec,
+            enabled=self.config.detector.motion_gate_enabled,
+        )
+        self.telemetry = InferenceTelemetry(log_dir=self.config.recorder.output_dir)
+        self.cached_detections = sv.Detections.empty()
 
         self.tracker = ZoneTracker(
             polygon=self.config.zone.polygon,
@@ -114,8 +126,35 @@ class SoonsimService:
                 if self.tracker.status == EventStatus.IDLE:
                     self.ring_buffer.append(packet)
 
-                # Detection & Tracking
-                detections = self.detector.detect(packet.frame)
+                # Motion Gating & Frame Decimation
+                is_active = (self.tracker.status == EventStatus.ACTIVE)
+                should_decimate = (packet.frame_idx % self.config.detector.inference_interval_frames == 0)
+
+                if is_active or should_decimate:
+                    should_infer, reason, diff_score = self.motion_gate.evaluate(
+                        packet.frame, is_active_event=is_active
+                    )
+                    if should_infer:
+                        t0 = time.monotonic()
+                        detections = self.detector.detect(packet.frame)
+                        latency_ms = (time.monotonic() - t0) * 1000.0
+                        self.cached_detections = detections
+                        summary = f"{len(detections)} box(es)" if len(detections) > 0 else "none"
+                        self.telemetry.record_inference(
+                            frame_idx=packet.frame_idx,
+                            reason=reason,
+                            latency_ms=latency_ms,
+                            num_detected=len(detections),
+                            detected_summary=summary,
+                        )
+                    else:
+                        detections = self.cached_detections
+                        self.telemetry.record_skip(packet.frame_idx, reason, diff_score)
+                else:
+                    detections = self.cached_detections
+                    self.telemetry.record_skip(packet.frame_idx, "FRAME_DECIMATED", 0.0)
+
+                # Tracking & State Machine
                 tracked_dets, dog_in_zone, completed_event = self.tracker.update(
                     packet=packet,
                     detections=detections,
@@ -144,6 +183,8 @@ class SoonsimService:
                     stats = {
                         "connected": True,
                         "fps": current_fps,
+                        "skip_ratio": self.telemetry.stats.skip_ratio_percent,
+                        "avg_latency_ms": self.telemetry.stats.avg_inference_latency_ms,
                         "frame_idx": packet.frame_idx,
                         "status": self.tracker.status.value,
                         "status_color": status_colors.get(self.tracker.status, "white"),

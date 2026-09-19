@@ -25,10 +25,15 @@ class ZoneConfig(BaseModel):
 
 class DetectorConfig(BaseModel):
     model_name: str = Field(default="yolov8n.pt")
-    confidence_threshold: float = Field(default=0.45, ge=0.1, le=1.0)
+    confidence_threshold: float = Field(default=0.30, ge=0.1, le=1.0)
     dog_class_id: int = Field(default=16)
-    track_thresh: float = Field(default=0.25, ge=0.1, le=1.0)
+    track_thresh: float = Field(default=0.20, ge=0.1, le=1.0)
     match_thresh: float = Field(default=0.8, ge=0.1, le=1.0)
+    inference_interval_frames: int = Field(default=5, ge=1, le=30)
+    motion_gate_enabled: bool = Field(default=True)
+    motion_threshold: float = Field(default=4.0, ge=0.5, le=50.0)
+    failsafe_interval_sec: float = Field(default=30.0, ge=1.0, le=300.0)
+    max_threads: int = Field(default=2, ge=1, le=16)
 
 
 class RecorderConfig(BaseModel):

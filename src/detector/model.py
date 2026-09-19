@@ -12,7 +12,13 @@ class DogDetector:
         model_name: str = "yolov8n.pt",
         confidence_threshold: float = 0.30,
         class_ids: Union[int, List[int]] = [15, 16],
+        max_threads: int = 2,
     ):
+        try:
+            import torch
+            torch.set_num_threads(max_threads)
+        except Exception:
+            pass
         self.model = YOLO(model_name)
         self.confidence_threshold = confidence_threshold
         self.class_ids = [class_ids] if isinstance(class_ids, int) else class_ids

@@ -24,6 +24,8 @@ class Dashboard:
         table.add_row("System Uptime", uptime)
         table.add_row("Stream Status", "[green]CONNECTED[/green]" if stats.get("connected") else "[red]CONNECTING[/red]")
         table.add_row("Processing FPS", f"{stats.get('fps', 0.0):.1f}")
+        table.add_row("Inference Skip", f"{stats.get('skip_ratio', 0.0):.1f}%")
+        table.add_row("Inference Latency", f"{stats.get('avg_latency_ms', 0.0):.1f} ms")
         table.add_row("Frame Index", str(stats.get("frame_idx", 0)))
         table.add_row("Zone Event Status", f"[{stats.get('status_color', 'white')}]{stats.get('status', 'IDLE')}[/]")
         table.add_row("Dog on Pad", "[bold green]YES[/bold green]" if stats.get("dog_in_zone") else "[dim]NO[/dim]")
