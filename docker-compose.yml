@@ -1,0 +1,17 @@
+services:
+  soonsim-detector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: soonsim-detector
+    restart: unless-stopped
+    volumes:
+      - ./config/config.toml:/app/config/config.toml:ro
+      - ./records:/app/records:rw
+    environment:
+      - PYTHONUNBUFFERED=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

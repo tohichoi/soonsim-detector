@@ -1,0 +1,20 @@
+[project]
+name = "soonsim-detector"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "loguru>=0.7.3",
+    "onnxruntime>=1.30.0",
+    "opencv-python-headless>=5.0.0.93",
+    "pydantic>=2.13.5",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "python-telegram-bot>=22.8",
+    "rich>=15.0.0",
+    "supervision>=0.30.4",
+    "ultralytics>=8.4.155",
+    "uvicorn>=0.53.0",
+]

@@ -1,0 +1,35 @@
+# Python Virtual Environments & Cache
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+
+# Sensitive Configurations & Secrets (Keep config.example.toml tracked)
+config/config.toml
+config/config.local.toml
+*.env
+*.env.*
+
+# Media, Recordings & Snapshots
+records/
+debug_output/
+*.mp4
+*.avi
+*.mkv
+*.jpg
+*.jpeg
+*.png
+
+# Model Weights (Downloaded on demand)
+*.pt
+*.onnx
+models/*.pt
+models/*.onnx
+
+# OS & IDE Files
+.DS_Store
+.idea/
+.vscode/
+*.swp

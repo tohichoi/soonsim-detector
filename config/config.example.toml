@@ -1,0 +1,36 @@
+[camera]
+# RTSP URL or local video file path (e.g., "./sample.mp4" for local mock test)
+source = "rtsp://admin:password@192.168.0.100:554/stream2"
+fps = 15
+reconnect_interval_sec = 3.0
+
+[zone]
+# Polygon coordinates [x, y] for the potty pad in 640x360 resolution
+# Calibrate using: uv run python -m src.cli.calibrate
+polygon = [
+    [180, 140],
+    [460, 140],
+    [460, 330],
+    [180, 330]
+]
+
+[detector]
+model_name = "yolov8n.pt"
+confidence_threshold = 0.45
+dog_class_id = 16
+track_thresh = 0.25
+match_thresh = 0.8
+
+[recorder]
+pre_buffer_sec = 5
+post_buffer_sec = 5
+output_dir = "./records"
+min_stay_duration_sec = 1.0
+
+[telegram]
+enabled = false
+bot_token = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+chat_id = "YOUR_TELEGRAM_CHAT_ID_HERE"
+
+[logging]
+level = "INFO"
