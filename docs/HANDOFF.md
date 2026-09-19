@@ -1,65 +1,70 @@
 # Soonsim Detector 인수인계서 (HANDOFF)
 
 - 작성일: 2026-09-20
-- 담당: S.P.I.R.E. 팀 (Leo, Kai, Elena, Noah, Axel, Chloe)
-- 승인권자: Mike (Managing Director)
+- 총괄: Mike (Managing Director)
+- 참여 에이전트:
+  - Executive Staff: Atlas (전략 조율 및 파이프라인 총괄)
+  - S.P.I.R.E.: Leo (아키텍처/설계), Kai (백엔드/영상 파이프라인), Maya (웹 뷰어 UI), Noah (QA/테스트 검증), Elena (품질/보안 감사)
+  - O.R.B.I.T.: Chloe (CI/CD 보안 및 터널링 파이프라인), Axel (Synology NAS 플랫폼 인프라)
 
 ---
 
 ## 1. 프로젝트 요약 및 핵심 성과
 
-Tapo C100 카메라의 RTSP 서브스트림(640x360 @ 15fps)을 상시 감시하여 배변판 영역 내 반려견(순심이)의 진입 및 체류를 고정밀로 탐지하고, 전후 5초를 포함한 고대비 바운딩 박스 오버레이 MP4 영상을 텔레그램으로 자동 전송하는 시스템을 완성했습니다.
+Tapo C100 카메라의 RTSP 서브스트림(640x360 @ 15fps)을 감시하여 배변판 영역 내 반려견(순심이)의 진입 및 체류를 고정밀로 탐지하고, 전후 5초를 포함한 고대비 바운딩 박스 오버레이 MP4 영상을 텔레그램으로 자동 전송하는 시스템입니다.
+Synology NAS(DS923+)에 상시 가동 컨테이너로 배포되었으며, 외부 인터넷에서 PIN 보안 잠금 화면을 통해 언제 어디서나 고정 도메인으로 실시간 뷰어에 접속할 수 있습니다.
 
 ### 주요 달성 내역
-1. **DRY & 오픈소스 재사용**: Roboflow `supervision`과 `ultralytics` YOLOv8n을 결합하여 자체 컴퓨터 비전 알고리즘 없이 표준 컴포넌트로 파이프라인 구성.
-2. **조명 변동 오탐 0건**: 시맨틱 딥러닝 객체 분류 및 ByteTrack 시계열 연속 프레임 추적으로 조명 점소등 노이즈 완전 배제.
-3. **TOML 단일 설정 일원화**: `.env` 없이 `config/config.toml` 단일 파일로 모든 설정(카메라, 배변판 Polygon, 텔레그램, 임계값) 관리.
-4. **실시간 디버그 웹 뷰어**: 5초 주기 스냅샷, 5분(60개) 롤링 큐, 배변판 진입 시 브라우저 Web Audio 강아지 짖는 소리("멍멍!") 재생 기능 추가.
-5. **검증 완결**: Pytest 단위/통합 테스트 6건 전원 통과, 로컬 Docker 빌드/실행 검증 완료.
+1. **모션 게이팅 기반 초저전력 CPU 최적화**: 프레임 차분 기반 모션 게이팅을 적용하여 배변판 주변 움직임이 없을 때는 YOLO 추론을 0회로 제한(평상시 CPU 1% 미만).
+2. **조명 변동 오탐 방지**: 시맨틱 딥러닝 객체 분류 및 ByteTrack 시계열 연속 프레임 추적으로 조명 점소등 노이즈 완전 배제.
+3. **PIN 잠금 화면 및 세션 인증**: 웹 뷰어 접근 시 PIN(1290) 인증 및 HttpOnly 세션 쿠키 보호 적용.
+4. **ngrok 고정 정적 도메인 터널링**: SK 모뎀의 포트포워딩 불가 환경을 극복하고 영구 정적 도메인(`blend-replay-canary.ngrok-free.dev`)으로 외부 접속 구축.
+5. **Synology NAS 원터치 배포 파이프라인**: `scripts/deploy.sh`를 통해 이미지 빌드, 다중 컨테이너 재생성, 헬스체크를 1회 명령으로 자동 수행.
+6. **단위/통합 테스트 100% 통과**: 14개 테스트 케이스 전원 패스.
 
 ---
 
 ## 2. 컴포넌트 아키텍처 및 모듈 맵
 
-- `src/config.py`: `tomllib` + `pydantic` 기반 타입 세이프 설정 관리자.
+- `src/config.py`: `tomllib` + `pydantic` 기반 설정 관리자 (카메라, 배변판, 텔레그램, 뷰어 PIN 등).
 - `src/capture/stream.py`: `VideoStreamReader` (RTSP 자동 재연결/파일 루프) & `RingBuffer` (5초 슬라이딩 윈도우).
 - `src/detector/model.py`: `DogDetector` (YOLOv8n ONNX CPU 다중 동물 클래스 15/16 필터).
-- `src/detector/zone_tracker.py`: `ZoneTracker` (`sv.PolygonZone` 다중 앵커 + `sv.ByteTrack` 상태 머신).
+- `src/detector/zone_tracker.py`: `ZoneTracker` (`sv.PolygonZone` 다중 앵커 + `sv.ByteTrack` 상태 머신 + 모션 게이팅).
 - `src/recorder/annotator.py`: `HighContrastAnnotator` (3px 형광 라임/시안 고대비 박스/라벨/타임스탬프).
 - `src/recorder/exporter.py`: `VideoClipExporter` (`sv.VideoSink` 기반 전후 5초 MP4 합성).
 - `src/notifier/telegram.py`: `TelegramNotifier` (`python-telegram-bot` 비동기 비디오 업로드 및 체류 시간 캡션).
-- `src/cli/calibrate.py`: 배변판 모서리 격자 캘리브레이션 도구 (`snapshot_grid.jpg`).
-- `src/cli/dashboard.py`: Rich 실시간 콘솔 대시보드.
-- `src/cli/debug_view.py`: 단일 프레임 정밀 객체/신뢰도 진단 도구.
-- `src/viewer/app.py`: 5초 주기 캡처, 5분(60개) 롤링 큐, Web Audio 강아지 소리 알림 FastAPI 웹 뷰어.
+- `src/viewer/app.py`: FastAPI 실시간 웹 뷰어 (PIN 보안 잠금 화면, 실시간 캔버스 오버레이, 롤링 큐, 녹화 영상 브라우징).
 - `src/main.py`: 통합 상시 감시 데몬 엔트리포인트.
+- `docker-compose.yml`: `soonsim-detector`, `soonsim-viewer`, `soonsim-ngrok` 3중 서비스 구성.
+- `scripts/deploy.sh`: NAS 원격 자동 빌드 및 배포 스크립트.
 
 ---
 
-## 3. 운영 및 유지보수 가이드
+## 3. 운영 및 접속 가이드
 
-### 실시간 디버그 뷰어 실행
-```bash
-uv run python -m src.viewer.app
-```
-브라우저 접속: `http://localhost:8080` (또는 가용 포트)
+### 외부 인터넷 접속 (영구 고정 도메인)
+- URL: `https://blend-replay-canary.ngrok-free.dev`
+- 기본 PIN: `1290`
+- 참고: 최초 접속 시 ngrok 무료 계정 안내 화면에서 `Visit Site` 클릭 후 PIN 입력
 
-### 상시 감시 데몬 실행
-```bash
-uv run python -m src.main
-```
+### 로컬 LAN 접속 (집 내부 Wi-Fi)
+- URL: `http://192.168.45.63:8080`
 
-### Synology NAS 배포
+### NAS 재배포 및 업데이트 명령어
 ```bash
 ./scripts/deploy.sh
 ```
 
+### 테스트 실행
+```bash
+uv run pytest
+```
+
 ---
 
-## 4. 품질 및 보안 체크리스트
+## 4. Git 형상 관리 상태
 
-- [x] PEP8 / Python 3.12+ 타입 어노테이션 준수.
-- [x] 시크릿 정보(`.env`, `config/config.toml`, 레코드 영상) `.gitignore` 등록 완료.
-- [x] 단위/통합 테스트 100% 통과 (`uv run pytest`).
-- [x] Docker 다단계 빌드 무결성 확인 (`docker compose build`).
-- [x] NAS 리소스 제약 충족 (CPU 5% 이하, 메모리 150MB 이하).
+- 원격 저장소: `git@github.com:tohichoi/soonsim-detector.git`
+- 기본 브랜치: `main`
+- 최신 커밋: `c8651d1` (`feat(deploy): configure ngrok permanent static domain tunnel for synology nas`)
+- 작업 트리 상태: Clean (모든 소스 및 설정 동기화 완료)
