@@ -24,7 +24,7 @@ rsync -avz --delete -e "ssh" --rsync-path="/bin/rsync" \
     ./ "${REMOTE_HOST}:${REMOTE_DIR}/"
 
 echo "=== 4. Building Base Image and Starting Multi-Service Containers on NAS ==="
-ssh "${REMOTE_HOST}" "export PATH=\$PATH:/var/packages/ContainerManager/target/usr/bin:/usr/syno/bin; cd ${REMOTE_DIR} && docker build --network=host -t soonsim-detector:latest . && docker compose down --remove-orphans 2>/dev/null || true; docker rm -f soonsim-detector soonsim-viewer soonsim-tunnel 2>/dev/null || true; docker network prune -f 2>/dev/null || true; docker compose up -d"
+ssh "${REMOTE_HOST}" "export PATH=\$PATH:/var/packages/ContainerManager/target/usr/bin:/usr/syno/bin; cd ${REMOTE_DIR} && docker build --network=host -t soonsim-detector:latest . && docker compose down --remove-orphans 2>/dev/null || true; docker rm -f soonsim-detector soonsim-viewer soonsim-tunnel 2>/dev/null || true; docker network prune -f 2>/dev/null || true; docker compose up -d --force-recreate"
 
 echo "=== 5. Checking Remote Containers Status ==="
 ssh "${REMOTE_HOST}" "export PATH=\$PATH:/var/packages/ContainerManager/target/usr/bin:/usr/syno/bin; cd ${REMOTE_DIR} && docker compose ps"

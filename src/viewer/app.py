@@ -10,12 +10,13 @@ import threading
 import time
 from typing import List, Optional
 import cv2
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, Response
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
+import hashlib
 from loguru import logger
 import numpy as np
 from pydantic import BaseModel, ConfigDict
-from src.config import load_config
+from src.config import AppConfig, load_config
 import supervision as sv
 from ultralytics import YOLO
 
@@ -288,6 +289,254 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Soonsim Detector - 30m Smart Debug Viewer", lifespan=lifespan)
 
 
+class LoginRequest(BaseModel):
+    pin: str
+
+
+def compute_auth_token(pin: str, secret: str) -> str:
+    """Compute SHA256 signature for session cookie."""
+    return hashlib.sha256(f"{pin}:{secret}".encode("utf-8")).hexdigest()
+
+
+def check_auth(request: Request, config: AppConfig) -> bool:
+    """Check if request contains valid auth cookie."""
+    cookie_token = request.cookies.get("soonsim_auth")
+    expected_token = compute_auth_token(config.viewer.pin, config.viewer.session_secret)
+    return cookie_token == expected_token
+
+
+LOGIN_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="순심이">
+    <meta name="theme-color" content="#0b1120">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230b1120' stroke='%2322c55e' stroke-width='4'/%3E%3Cpath d='M30 40 Q20 25 35 25 Q45 25 40 40 Z' fill='%23f8fafc'/%3E%3Cpath d='M70 40 Q80 25 65 25 Q55 25 60 40 Z' fill='%23f8fafc'/%3E%3Cellipse cx='50' cy='55' rx='28' ry='22' fill='%23f8fafc'/%3E%3Ccircle cx='40' cy='52' r='4' fill='%230f172a'/%3E%3Ccircle cx='60' cy='52' r='4' fill='%230f172a'/%3E%3Cellipse cx='50' cy='62' rx='6' ry='4' fill='%23f43f5e'/%3E%3Ccircle cx='78' cy='22' r='10' fill='%2322c55e'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230b1120' stroke='%2322c55e' stroke-width='4'/%3E%3Cpath d='M30 40 Q20 25 35 25 Q45 25 40 40 Z' fill='%23f8fafc'/%3E%3Cpath d='M70 40 Q80 25 65 25 Q55 25 60 40 Z' fill='%23f8fafc'/%3E%3Cellipse cx='50' cy='55' rx='28' ry='22' fill='%23f8fafc'/%3E%3Ccircle cx='40' cy='52' r='4' fill='%230f172a'/%3E%3Ccircle cx='60' cy='52' r='4' fill='%230f172a'/%3E%3Cellipse cx='50' cy='62' rx='6' ry='4' fill='%23f43f5e'/%3E%3Ccircle cx='78' cy='22' r='10' fill='%2322c55e'/%3E%3C/svg%3E">
+    <title>순심이 실시간 감시 - 보안 잠금</title>
+    <style>
+        :root {
+            --bg-color: #0b1120;
+            --card-bg: #1e293b;
+            --text-color: #f8fafc;
+            --accent: #38bdf8;
+            --alert: #ef4444;
+            --success: #22c55e;
+            --border: #334155;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .lock-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 32px 24px;
+            width: 100%;
+            max-width: 360px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            animation: fadeIn 0.3s ease;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .logo-icon {
+            width: 68px;
+            height: 68px;
+            margin: 0 auto 16px;
+            background: #0f172a;
+            border: 2px solid #22c55e;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            box-shadow: 0 0 16px rgba(34, 197, 94, 0.3);
+        }
+        .title { font-size: 1.35rem; font-weight: 700; color: #f8fafc; margin-bottom: 6px; }
+        .subtitle { font-size: 0.85rem; color: #94a3b8; margin-bottom: 24px; line-height: 1.4; }
+        .pin-display {
+            background: #0f172a;
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.6rem;
+            letter-spacing: 12px;
+            color: var(--accent);
+            margin-bottom: 20px;
+            font-family: monospace;
+            padding: 0 16px;
+            transition: all 0.2s ease;
+        }
+        .pin-display.error {
+            border-color: var(--alert);
+            color: var(--alert);
+            animation: shake 0.4s ease;
+        }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-8px); }
+            40%, 80% { transform: translateX(8px); }
+        }
+        .keypad {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .key-btn {
+            background: #0f172a;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            height: 54px;
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #f8fafc;
+            cursor: pointer;
+            transition: all 0.1s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+        }
+        .key-btn:active {
+            background: #334155;
+            transform: scale(0.95);
+        }
+        .key-btn.action {
+            font-size: 0.95rem;
+            color: #94a3b8;
+        }
+        .key-btn.submit {
+            background: #059669;
+            color: white;
+            border-color: #10b981;
+        }
+        .key-btn.submit:active {
+            background: #047857;
+        }
+        .msg {
+            font-size: 0.82rem;
+            color: var(--alert);
+            min-height: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="lock-card" id="lockCard">
+        <div class="logo-icon">🐕</div>
+        <h1 class="title">순심이 감시 뷰어</h1>
+        <p class="subtitle">보안 잠금 상태입니다.<br>PIN 비밀번호를 입력해주세요.</p>
+        
+        <div class="pin-display" id="pinDisplay">····</div>
+        
+        <div class="keypad">
+            <button class="key-btn" onclick="pressKey('1')">1</button>
+            <button class="key-btn" onclick="pressKey('2')">2</button>
+            <button class="key-btn" onclick="pressKey('3')">3</button>
+            <button class="key-btn" onclick="pressKey('4')">4</button>
+            <button class="key-btn" onclick="pressKey('5')">5</button>
+            <button class="key-btn" onclick="pressKey('6')">6</button>
+            <button class="key-btn" onclick="pressKey('7')">7</button>
+            <button class="key-btn" onclick="pressKey('8')">8</button>
+            <button class="key-btn" onclick="pressKey('9')">9</button>
+            <button class="key-btn action" onclick="clearPin()">지우기</button>
+            <button class="key-btn" onclick="pressKey('0')">0</button>
+            <button class="key-btn submit" onclick="submitPin()">확인</button>
+        </div>
+        <div class="msg" id="msgText"></div>
+    </div>
+
+    <script>
+        let currentPin = "";
+
+        function updateDisplay() {
+            const display = document.getElementById('pinDisplay');
+            if (currentPin.length === 0) {
+                display.innerText = "····";
+                display.style.color = "#475569";
+            } else {
+                display.innerText = "●".repeat(currentPin.length);
+                display.style.color = "#38bdf8";
+            }
+        }
+
+        function pressKey(num) {
+            if (currentPin.length < 10) {
+                currentPin += num;
+                updateDisplay();
+                document.getElementById('msgText').innerText = "";
+                document.getElementById('pinDisplay').classList.remove('error');
+            }
+        }
+
+        function clearPin() {
+            currentPin = "";
+            updateDisplay();
+            document.getElementById('msgText').innerText = "";
+            document.getElementById('pinDisplay').classList.remove('error');
+        }
+
+        async function submitPin() {
+            if (currentPin.length === 0) return;
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pin: currentPin })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    window.location.reload();
+                } else {
+                    const display = document.getElementById('pinDisplay');
+                    display.classList.add('error');
+                    document.getElementById('msgText').innerText = data.detail || "비밀번호가 일치하지 않습니다.";
+                    currentPin = "";
+                    setTimeout(() => {
+                        updateDisplay();
+                    }, 400);
+                }
+            } catch (e) {
+                document.getElementById('msgText').innerText = "인증 서버 통신 실패";
+            }
+        }
+
+        // Keyboard support
+        window.addEventListener('keydown', (e) => {
+            if (e.key >= '0' && e.key <= '9') {
+                pressKey(e.key);
+            } else if (e.key === 'Backspace') {
+                currentPin = currentPin.slice(0, -1);
+                updateDisplay();
+            } else if (e.key === 'Enter') {
+                submitPin();
+            } else if (e.key === 'Escape') {
+                clearPin();
+            }
+        });
+
+        updateDisplay();
+    </script>
+</body>
+</html>
+"""
+
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ko">
@@ -540,6 +789,7 @@ HTML_TEMPLATE = """
         </div>
         <div class="header-controls">
             <button class="audio-btn" id="audioToggle" onclick="toggleAudio()">소리 알림: OFF (클릭하여 켜기)</button>
+            <button class="audio-btn" style="background:#1e293b; color:#94a3b8;" onclick="logout()">🔒 잠금</button>
         </div>
     </div>
 
@@ -719,6 +969,15 @@ HTML_TEMPLATE = """
             }
         }
 
+        async function logout() {
+            try {
+                await fetch('/api/auth/logout', { method: 'POST' });
+                window.location.reload();
+            } catch (e) {
+                window.location.reload();
+            }
+        }
+
         setInterval(fetchLiveStatus, 2500);
         fetchLiveStatus();
     </script>
@@ -728,12 +987,45 @@ HTML_TEMPLATE = """
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
-    return HTMLResponse(content=HTML_TEMPLATE)
+async def index(request: Request):
+    if check_auth(request, viewer_service.config):
+        return HTMLResponse(content=HTML_TEMPLATE)
+    return HTMLResponse(content=LOGIN_HTML_TEMPLATE)
+
+
+@app.post("/api/auth/login")
+async def login(req: LoginRequest, response: Response):
+    if req.pin == viewer_service.config.viewer.pin:
+        token = compute_auth_token(
+            viewer_service.config.viewer.pin,
+            viewer_service.config.viewer.session_secret,
+        )
+        response.set_cookie(
+            key="soonsim_auth",
+            value=token,
+            max_age=2592000,  # 30 days
+            httponly=True,
+            samesite="lax",
+            path="/",
+        )
+        return {"success": True, "message": "인증 성공"}
+    raise HTTPException(status_code=401, detail="비밀번호가 일치하지 않습니다.")
+
+
+@app.post("/api/auth/logout")
+async def logout(response: Response):
+    response.delete_cookie(key="soonsim_auth", path="/")
+    return {"success": True, "message": "로그아웃 완료"}
+
+
+def require_auth(request: Request):
+    if not check_auth(request, viewer_service.config):
+        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
 
 
 @app.get("/api/live")
-async def get_live():
+async def get_live(request: Request):
+    require_auth(request)
     state = viewer_service.get_live_state()
     return {
         "last_poll_str": state.last_poll_str,
@@ -750,7 +1042,8 @@ async def get_live():
 
 
 @app.get("/api/history")
-async def get_history():
+async def get_history(request: Request):
+    require_auth(request)
     history = viewer_service.get_history()
     return [
         {
@@ -767,7 +1060,8 @@ async def get_history():
 
 
 @app.get("/api/snapshot/latest")
-async def get_latest_snapshot():
+async def get_latest_snapshot(request: Request):
+    require_auth(request)
     state = viewer_service.get_live_state()
     if not state.latest_image_bytes:
         raise HTTPException(status_code=404, detail="No frames captured yet.")
@@ -775,7 +1069,8 @@ async def get_latest_snapshot():
 
 
 @app.get("/api/snapshot/{record_id}")
-async def get_snapshot(record_id: int):
+async def get_snapshot(record_id: int, request: Request):
+    require_auth(request)
     record = viewer_service.get_snapshot(record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Snapshot not found.")

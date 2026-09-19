@@ -49,6 +49,11 @@ class TelegramConfig(BaseModel):
     chat_id: str = Field(default="")
 
 
+class ViewerConfig(BaseModel):
+    pin: str = Field(default="1290")
+    session_secret: str = Field(default="soonsim-viewer-auth-token-salt")
+
+
 class LoggingConfig(BaseModel):
     level: str = Field(default="INFO")
 
@@ -59,6 +64,7 @@ class AppConfig(BaseModel):
     detector: DetectorConfig = Field(default_factory=DetectorConfig)
     recorder: RecorderConfig = Field(default_factory=RecorderConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    viewer: ViewerConfig = Field(default_factory=ViewerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
 
