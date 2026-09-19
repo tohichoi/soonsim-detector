@@ -24,23 +24,14 @@ rsync -avz --delete -e "ssh" --rsync-path="/bin/rsync" \
     ./ "${REMOTE_HOST}:${REMOTE_DIR}/"
 
 echo "=== 4. Building Base Image and Starting Multi-Service Containers on NAS ==="
-ssh "${REMOTE_HOST}" "export PATH=\$PATH:/var/packages/ContainerManager/target/usr/bin:/usr/syno/bin; cd ${REMOTE_DIR} && docker build --network=host -t soonsim-detector:latest . && docker compose down --remove-orphans 2>/dev/null || true; docker rm -f soonsim-detector soonsim-viewer soonsim-tunnel 2>/dev/null || true; docker network prune -f 2>/dev/null || true; docker compose up -d --force-recreate"
+ssh "${REMOTE_HOST}" "export PATH=\$PATH:/var/packages/ContainerManager/target/usr/bin:/usr/syno/bin; cd ${REMOTE_DIR} && docker build --network=host -t soonsim-detector:latest . && docker compose down --remove-orphans 2>/dev/null || true; docker rm -f soonsim-detector soonsim-viewer soonsim-tunnel soonsim-ngrok 2>/dev/null || true; docker network prune -f 2>/dev/null || true; docker compose up -d --force-recreate"
 
 echo "=== 5. Checking Remote Containers Status ==="
 ssh "${REMOTE_HOST}" "export PATH=\$PATH:/var/packages/ContainerManager/target/usr/bin:/usr/syno/bin; cd ${REMOTE_DIR} && docker compose ps"
 
-echo "=== 6. Extracting Cloudflare Tunnel External URL ==="
-sleep 6
-TUNNEL_URL=$(ssh "${REMOTE_HOST}" "export PATH=\$PATH:/var/packages/ContainerManager/target/usr/bin:/usr/syno/bin; cd ${REMOTE_DIR} && docker compose logs cloudflared 2>&1" | grep -o 'https://.*\.trycloudflare\.com' | head -n 1 || true)
-
 echo ""
 echo "=================================================================="
 echo " Deploy to Synology NAS (${REMOTE_HOST}) completed successfully!"
-if [ -n "${TUNNEL_URL}" ]; then
-    echo " Cloudflare External HTTPS URL: ${TUNNEL_URL}"
-else
-    echo " Tunnel URL is initializing. Run this command to check:"
-    echo " ssh ${REMOTE_HOST} 'export PATH=\$PATH:/var/packages/ContainerManager/target/usr/bin:/usr/syno/bin; cd ${REMOTE_DIR} && docker compose logs cloudflared'"
-fi
+echo " Permanent External HTTPS URL:  https://blend-replay-canary.ngrok-free.dev"
 echo " Local LAN Viewer URL:          http://192.168.45.63:8080"
 echo "=================================================================="

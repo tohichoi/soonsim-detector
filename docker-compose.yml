@@ -37,12 +37,17 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: soonsim-tunnel
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: soonsim-ngrok
     restart: unless-stopped
     network_mode: "host"
-    command: tunnel --no-autoupdate --protocol http2 --url http://127.0.0.1:8080
+    environment:
+      - NGROK_AUTHTOKEN=3JYNypPzZky0nRSORm8yxpfXFvz_6XjsTSoDXSTom7UCmikK9
+    command:
+      - "http"
+      - "--url=blend-replay-canary.ngrok-free.dev"
+      - "8080"
     depends_on:
       - soonsim-viewer
     logging:
@@ -50,3 +55,4 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
