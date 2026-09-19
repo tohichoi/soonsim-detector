@@ -3,11 +3,13 @@
 import datetime
 from pathlib import Path
 from typing import Optional
-import cv2
+from zoneinfo import ZoneInfo
 from loguru import logger
 import supervision as sv
 from src.detector.zone_tracker import CompletedEvent
 from src.recorder.annotator import HighContrastAnnotator
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 class VideoClipExporter:
@@ -29,7 +31,7 @@ class VideoClipExporter:
         height, width = first_frame.shape[:2]
         video_info = sv.VideoInfo(width=width, height=height, fps=self.fps, total_frames=len(event.frames))
 
-        timestamp_str = datetime.datetime.fromtimestamp(event.start_time).strftime("%Y%m%d_%H%M%S")
+        timestamp_str = datetime.datetime.fromtimestamp(event.start_time, tz=KST).strftime("%Y%m%d_%H%M%S")
         output_file = self.output_dir / f"soonsim_{timestamp_str}.mp4"
 
         try:

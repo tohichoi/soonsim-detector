@@ -4,11 +4,11 @@ import argparse
 from collections import deque
 from contextlib import asynccontextmanager
 import datetime
-from pathlib import Path
 import socket
 import threading
 import time
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 import cv2
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
@@ -20,6 +20,7 @@ from src.config import AppConfig, load_config
 import supervision as sv
 from ultralytics import YOLO
 
+KST = ZoneInfo("Asia/Seoul")
 ANIMAL_CLASS_IDS = {15, 16}  # COCO: 15=cat, 16=dog
 
 
@@ -152,7 +153,7 @@ class DebugViewerService:
 
             annotated = self.label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
 
-        now_dt = datetime.datetime.now()
+        now_dt = datetime.datetime.now(KST)
         dt_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
         status_text = "DOG IN ZONE" if dog_in_zone else ("MOTION" if change_score > self.motion_threshold else "NO CHANGE")
         status_color = (0, 255, 0) if dog_in_zone else ((0, 200, 255) if change_score > self.motion_threshold else (180, 180, 180))
@@ -194,7 +195,7 @@ class DebugViewerService:
                     annotated, dog_in_zone, detected_labels, change_score, event_type = self._evaluate_frame(frame)
 
                     now = time.time()
-                    dt_str = datetime.datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S")
+                    dt_str = datetime.datetime.fromtimestamp(now, tz=KST).strftime("%Y-%m-%d %H:%M:%S")
 
                     _, img_encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
                     img_bytes = img_encoded.tobytes()
@@ -1096,10 +1097,10 @@ def main():
     args = parser.parse_args()
 
     port = find_available_port(start_port=args.port)
-    print(f"\n==================================================================")
-    print(f" Soonsim Detector 30-Min Smart Live Viewer Started!")
+    print("\n==================================================================")
+    print(" Soonsim Detector 30-Min Smart Live Viewer Started!")
     print(f" URL: http://localhost:{port}")
-    print(f"==================================================================\n")
+    print("==================================================================\n")
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 

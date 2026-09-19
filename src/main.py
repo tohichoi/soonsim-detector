@@ -7,6 +7,7 @@ import signal
 import sys
 import threading
 import time
+from zoneinfo import ZoneInfo
 from loguru import logger
 from rich.live import Live
 import supervision as sv
@@ -20,6 +21,8 @@ from src.notifier.telegram import TelegramNotifier
 from src.recorder.annotator import HighContrastAnnotator
 from src.recorder.exporter import VideoClipExporter
 from src.utils.telemetry import InferenceTelemetry
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 class SoonsimService:
@@ -88,7 +91,7 @@ class SoonsimService:
                         start_time=event.start_time,
                     )
                     self.alerts_count += 1
-                    self.last_alert_time = datetime.datetime.fromtimestamp(event.start_time).strftime("%Y-%m-%d %H:%M:%S")
+                    self.last_alert_time = datetime.datetime.fromtimestamp(event.start_time, tz=KST).strftime("%Y-%m-%d %H:%M:%S")
             except Exception as e:
                 logger.error(f"Error processing completed event: {e}")
 

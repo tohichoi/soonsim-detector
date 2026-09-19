@@ -3,9 +3,12 @@
 import asyncio
 import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from loguru import logger
 from telegram import Bot
 from src.config import TelegramConfig
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 class TelegramNotifier:
@@ -23,7 +26,7 @@ class TelegramNotifier:
             logger.error(f"Video file not found for notification: {video_path}")
             return False
 
-        time_str = datetime.datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M:%S")
+        time_str = datetime.datetime.fromtimestamp(start_time, tz=KST).strftime("%Y-%m-%d %H:%M:%S")
         caption = (
             f"[순심이 배변판 감지 알림]\n"
             f"일시: {time_str}\n"

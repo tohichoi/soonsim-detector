@@ -1,7 +1,6 @@
 """Unit tests for MotionGate and InferenceTelemetry."""
 
 import numpy as np
-import pytest
 from src.detector.motion_gate import MotionGate
 from src.utils.telemetry import InferenceTelemetry
 

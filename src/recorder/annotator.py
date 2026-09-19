@@ -2,9 +2,12 @@
 
 import datetime
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 import cv2
 import numpy as np
 import supervision as sv
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 class HighContrastAnnotator:
@@ -53,7 +56,7 @@ class HighContrastAnnotator:
             annotated = self.label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
 
         # Draw timestamp header
-        dt_str = datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        dt_str = datetime.datetime.fromtimestamp(timestamp, tz=KST).strftime("%Y-%m-%d %H:%M:%S")
         status_text = "DOG IN ZONE" if is_dog_in_zone else "MONITORING"
         status_color = (0, 255, 0) if is_dog_in_zone else (200, 200, 200)
 

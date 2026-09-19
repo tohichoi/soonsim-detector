@@ -14,6 +14,7 @@ services:
       - ./records:/app/records:rw
     environment:
       - PYTHONUNBUFFERED=1
+      - TZ=Asia/Seoul
     logging:
       driver: "json-file"
       options:
@@ -31,6 +32,7 @@ services:
       - ./records:/app/records:ro
     environment:
       - PYTHONUNBUFFERED=1
+      - TZ=Asia/Seoul
     logging:
       driver: "json-file"
       options:

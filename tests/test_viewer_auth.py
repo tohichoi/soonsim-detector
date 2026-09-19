@@ -2,7 +2,7 @@
 
 from fastapi.testclient import TestClient
 from src.config import load_config
-from src.viewer.app import app, compute_auth_token
+from src.viewer.app import app
 
 
 def test_unauthenticated_access_returns_login_page():
@@ -43,4 +43,15 @@ def test_login_with_correct_pin_sets_cookie_and_authenticates():
     # Authenticated access to /api/live succeeds
     live_res = client.get("/api/live")
     assert live_res.status_code == 200
-    assert "status_title" in live_res.json()
+    live_data = live_res.json()
+    assert "status_title" in live_data
+    assert "last_poll_str" in live_data
+    assert live_data["last_poll_str"] == "대기 중"
+
+
+def test_kst_timestamp_format():
+    import datetime
+    from src.viewer.app import KST
+    now = datetime.datetime.fromtimestamp(1700000000, tz=KST)
+    assert now.strftime("%Y-%m-%d %H:%M:%S") == "2023-11-15 07:13:20"
+    assert now.tzinfo.key == "Asia/Seoul"

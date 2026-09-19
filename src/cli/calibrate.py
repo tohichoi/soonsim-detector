@@ -2,10 +2,8 @@
 
 from pathlib import Path
 import cv2
-from loguru import logger
 import numpy as np
 from rich.console import Console
-from rich.prompt import Prompt
 from src.config import load_config
 
 console = Console()
