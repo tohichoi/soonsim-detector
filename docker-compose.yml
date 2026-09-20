@@ -11,25 +11,8 @@ services:
     command: ["uv", "run", "python", "-m", "src.main", "--no-dashboard"]
     volumes:
       - ./config/config.toml:/app/config/config.toml:ro
+      - ./src:/app/src:ro
       - ./records:/app/records:rw
-    environment:
-      - PYTHONUNBUFFERED=1
-      - TZ=Asia/Seoul
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  soonsim-viewer:
-    image: soonsim-detector:latest
-    container_name: soonsim-viewer
-    restart: unless-stopped
-    network_mode: "host"
-    command: ["uv", "run", "python", "-m", "src.viewer.app", "--port", "8080"]
-    volumes:
-      - ./config/config.toml:/app/config/config.toml:ro
-      - ./records:/app/records:ro
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=Asia/Seoul
@@ -51,10 +34,9 @@ services:
       - "--url=blend-replay-canary.ngrok-free.dev"
       - "8080"
     depends_on:
-      - soonsim-viewer
+      - soonsim-detector
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-

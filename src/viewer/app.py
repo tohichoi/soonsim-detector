@@ -1,293 +1,15 @@
-"""FastAPI continuous 5-second debug viewer with 30-minute smart change filtering and live status UI."""
+"""FastAPI web viewer application for Soonsim Detector."""
 
-import argparse
-from collections import deque
-from contextlib import asynccontextmanager
-import datetime
-import socket
-import threading
-import time
-from typing import List, Optional
-from zoneinfo import ZoneInfo
-import cv2
+import hashlib
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
-import hashlib
-from loguru import logger
-import numpy as np
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from src.config import AppConfig, load_config
-import supervision as sv
-from ultralytics import YOLO
+from src.viewer.state import KST, ViewerStateStore
+from src.viewer.templates import HTML_TEMPLATE, LOGIN_HTML_TEMPLATE
 
-KST = ZoneInfo("Asia/Seoul")
-ANIMAL_CLASS_IDS = {15, 16}  # COCO: 15=cat, 16=dog
-
-
-class SnapshotRecord(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    id: int
-    timestamp_str: str
-    timestamp_epoch: float
-    detected_objects: List[str]
-    dog_in_zone: bool
-    event_type: str  # "DOG_ON_PAD", "ANIMAL_DETECTED", "MOTION_CHANGE", "PERIODIC_BASELINE"
-    change_score: float
-    image_bytes: bytes
-
-
-class LiveState(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    last_poll_str: str = "대기 중"
-    last_poll_epoch: float = 0.0
-    status_title: str = "감시 대기 중"
-    status_desc: str = "카메라 연결 대기 중입니다."
-    status_type: str = "idle"  # "no_change", "dog_on_pad", "motion", "idle"
-    detected_objects: List[str] = []
-    dog_in_zone: bool = False
-    change_score: float = 0.0
-    total_events_30m: int = 0
-    interval_sec: float = 5.0
-    latest_image_bytes: bytes = b""
-
-
-class DebugViewerService:
-    """Manages 5s polling, smart change detection, and 30-minute event timeline."""
-
-    def __init__(self, retention_sec: float = 1800.0, interval_sec: float = 5.0, motion_threshold: float = 4.5):
-        self.config = load_config()
-        self.retention_sec = retention_sec  # 30 minutes
-        self.interval_sec = interval_sec
-        self.motion_threshold = motion_threshold
-
-        self.history: deque[SnapshotRecord] = deque(maxlen=200)
-        self.live_state = LiveState(interval_sec=interval_sec)
-        self.lock = threading.Lock()
-        self.is_running = False
-        self.current_id = 0
-
-        self.model = YOLO(self.config.detector.model_name)
-        self.polygon_np = np.array(self.config.zone.polygon, dtype=np.int32)
-        self.zone = sv.PolygonZone(
-            polygon=self.polygon_np,
-            triggering_anchors=(sv.Position.CENTER, sv.Position.BOTTOM_CENTER),
-            require_all_anchors=False,
-        )
-        self.animal_box_annotator = sv.BoxAnnotator(thickness=3, color=sv.Color.from_hex("#00FF00"))
-        self.other_box_annotator = sv.BoxAnnotator(thickness=1, color=sv.Color.from_hex("#64748B"))
-        self.label_annotator = sv.LabelAnnotator(
-            text_scale=0.5,
-            text_thickness=1,
-            color=sv.Color.from_hex("#00FF00"),
-            text_color=sv.Color.from_hex("#000000"),
-        )
-        self.zone_annotator = sv.PolygonZoneAnnotator(
-            zone=self.zone,
-            color=sv.Color.from_hex("#00FFFF"),
-            thickness=2,
-        )
-
-        self._prev_gray: Optional[np.ndarray] = None
-        self._prev_animal_count = 0
-        self._last_saved_time = 0.0
-
-    def _evaluate_frame(self, frame: np.ndarray) -> tuple[np.ndarray, bool, List[str], float, Optional[str]]:
-        """
-        Evaluate frame with YOLO & motion diff.
-        Returns (annotated_frame, dog_in_zone, detected_labels, change_score, event_type_or_None).
-        """
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray_blur = cv2.GaussianBlur(gray, (21, 21), 0)
-
-        change_score = 0.0
-        if self._prev_gray is not None:
-            diff = cv2.absdiff(gray_blur, self._prev_gray)
-            change_score = float(np.mean(diff))
-        self._prev_gray = gray_blur
-
-        results = self.model(frame, conf=0.20, verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(results)
-
-        is_in_zone = self.zone.trigger(detections=detections) if len(detections) > 0 else np.array([])
-
-        dog_in_zone = False
-        animal_count = 0
-        detected_labels = []
-
-        annotated = frame.copy()
-        annotated = self.zone_annotator.annotate(scene=annotated)
-
-        if len(detections) > 0:
-            animal_indices = []
-            other_indices = []
-            labels = []
-
-            for i in range(len(detections)):
-                cls_id = int(detections.class_id[i])
-                cls_name = self.model.names.get(cls_id, str(cls_id))
-                conf = float(detections.confidence[i])
-                in_z = bool(is_in_zone[i]) if i < len(is_in_zone) else False
-                is_animal = cls_id in ANIMAL_CLASS_IDS
-
-                if is_animal:
-                    animal_count += 1
-                    animal_indices.append(i)
-                    if in_z:
-                        dog_in_zone = True
-                else:
-                    other_indices.append(i)
-
-                loc_tag = " [ON PAD]" if (in_z and is_animal) else (" [PAD IGNORED]" if in_z else "")
-                tag = f"{cls_name} ({conf:.2f}){loc_tag}"
-                labels.append(tag)
-                detected_labels.append(tag)
-
-            if animal_indices:
-                animal_dets = detections[np.array(animal_indices)]
-                annotated = self.animal_box_annotator.annotate(scene=annotated, detections=animal_dets)
-            if other_indices:
-                other_dets = detections[np.array(other_indices)]
-                annotated = self.other_box_annotator.annotate(scene=annotated, detections=other_dets)
-
-            annotated = self.label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
-
-        now_dt = datetime.datetime.now(KST)
-        dt_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
-        status_text = "DOG IN ZONE" if dog_in_zone else ("MOTION" if change_score > self.motion_threshold else "NO CHANGE")
-        status_color = (0, 255, 0) if dog_in_zone else ((0, 200, 255) if change_score > self.motion_threshold else (180, 180, 180))
-
-        cv2.putText(annotated, f"{dt_str} | {status_text} (diff:{change_score:.1f})", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(annotated, f"{dt_str} | {status_text} (diff:{change_score:.1f})", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 1, cv2.LINE_AA)
-
-        now = time.time()
-        event_type: Optional[str] = None
-
-        if dog_in_zone:
-            event_type = "DOG_ON_PAD"
-        elif animal_count > 0 or animal_count != self._prev_animal_count:
-            event_type = "ANIMAL_DETECTED"
-        elif change_score >= self.motion_threshold:
-            event_type = "MOTION_CHANGE"
-        elif (now - self._last_saved_time) >= 600.0:
-            event_type = "PERIODIC_BASELINE"
-
-        self._prev_animal_count = animal_count
-        return annotated, dog_in_zone, detected_labels, change_score, event_type
-
-    def run_worker(self):
-        """Main polling worker running every interval_sec."""
-        logger.info(f"Starting Smart Debug Viewer worker (Interval: {self.interval_sec}s, Retention: {self.retention_sec}s / 30 mins)...")
-        cap = cv2.VideoCapture(self.config.camera.source)
-
-        while self.is_running:
-            start_t = time.monotonic()
-            if not cap.isOpened():
-                logger.warning("Camera stream disconnected. Retrying...")
-                cap.open(self.config.camera.source)
-                time.sleep(2.0)
-                continue
-
-            try:
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    annotated, dog_in_zone, detected_labels, change_score, event_type = self._evaluate_frame(frame)
-
-                    now = time.time()
-                    dt_str = datetime.datetime.fromtimestamp(now, tz=KST).strftime("%Y-%m-%d %H:%M:%S")
-
-                    _, img_encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-                    img_bytes = img_encoded.tobytes()
-
-                    with self.lock:
-                        if event_type is not None:
-                            self.current_id += 1
-                            record = SnapshotRecord(
-                                id=self.current_id,
-                                timestamp_str=dt_str,
-                                timestamp_epoch=now,
-                                detected_objects=detected_labels,
-                                dog_in_zone=dog_in_zone,
-                                event_type=event_type,
-                                change_score=change_score,
-                                image_bytes=img_bytes,
-                            )
-                            self.history.append(record)
-                            self._last_saved_time = now
-                            logger.info(f"[Recorded Event #{record.id}] Type: {event_type} | Objects: {detected_labels} | Diff: {change_score:.1f}")
-
-                        cutoff = now - self.retention_sec
-                        while self.history and self.history[0].timestamp_epoch < cutoff:
-                            self.history.popleft()
-
-                        if dog_in_zone:
-                            status_title = "순심이 배변판 진입 확인!"
-                            status_desc = "순심이가 현재 배변판 영역 안에 위치하고 있습니다."
-                            status_type = "dog_on_pad"
-                        elif change_score >= self.motion_threshold:
-                            status_title = "움직임/조도 변화 감지됨"
-                            status_desc = f"화면 내 움직임 또는 조명 변화가 감지되었습니다. (변화 점수: {change_score:.1f})"
-                            status_type = "motion"
-                        else:
-                            status_title = "현재 변화 없음 (정적 상태)"
-                            status_desc = "실시간 감시 중이며 배변판 및 화면에 유의미한 변화가 없습니다."
-                            status_type = "no_change"
-
-                        self.live_state = LiveState(
-                            last_poll_str=dt_str,
-                            last_poll_epoch=now,
-                            status_title=status_title,
-                            status_desc=status_desc,
-                            status_type=status_type,
-                            detected_objects=detected_labels,
-                            dog_in_zone=dog_in_zone,
-                            change_score=change_score,
-                            total_events_30m=len(self.history),
-                            interval_sec=self.interval_sec,
-                            latest_image_bytes=img_bytes,
-                        )
-                else:
-                    logger.warning("Failed to grab frame from stream.")
-            except Exception as e:
-                logger.error(f"Error in capture loop: {e}")
-
-            elapsed = time.monotonic() - start_t
-            sleep_t = max(0.1, self.interval_sec - elapsed)
-            time.sleep(sleep_t)
-
-        cap.release()
-        logger.info("Debug Viewer worker stopped.")
-
-    def get_live_state(self) -> LiveState:
-        with self.lock:
-            return self.live_state
-
-    def get_history(self) -> List[SnapshotRecord]:
-        with self.lock:
-            return list(self.history)
-
-    def get_snapshot(self, record_id: int) -> Optional[SnapshotRecord]:
-        with self.lock:
-            for item in self.history:
-                if item.id == record_id:
-                    return item
-            return None
-
-
-viewer_service = DebugViewerService(retention_sec=1800.0, interval_sec=5.0, motion_threshold=4.5)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    viewer_service.is_running = True
-    thread = threading.Thread(target=viewer_service.run_worker, daemon=True)
-    thread.start()
-    yield
-    viewer_service.is_running = False
-
-
-app = FastAPI(title="Soonsim Detector - 30m Smart Debug Viewer", lifespan=lifespan)
+default_state_store = ViewerStateStore()
 
 
 class LoginRequest(BaseModel):
@@ -306,802 +28,118 @@ def check_auth(request: Request, config: AppConfig) -> bool:
     return cookie_token == expected_token
 
 
-LOGIN_HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="순심이">
-    <meta name="theme-color" content="#0b1120">
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230b1120' stroke='%2322c55e' stroke-width='4'/%3E%3Cpath d='M30 40 Q20 25 35 25 Q45 25 40 40 Z' fill='%23f8fafc'/%3E%3Cpath d='M70 40 Q80 25 65 25 Q55 25 60 40 Z' fill='%23f8fafc'/%3E%3Cellipse cx='50' cy='55' rx='28' ry='22' fill='%23f8fafc'/%3E%3Ccircle cx='40' cy='52' r='4' fill='%230f172a'/%3E%3Ccircle cx='60' cy='52' r='4' fill='%230f172a'/%3E%3Cellipse cx='50' cy='62' rx='6' ry='4' fill='%23f43f5e'/%3E%3Ccircle cx='78' cy='22' r='10' fill='%2322c55e'/%3E%3C/svg%3E">
-    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230b1120' stroke='%2322c55e' stroke-width='4'/%3E%3Cpath d='M30 40 Q20 25 35 25 Q45 25 40 40 Z' fill='%23f8fafc'/%3E%3Cpath d='M70 40 Q80 25 65 25 Q55 25 60 40 Z' fill='%23f8fafc'/%3E%3Cellipse cx='50' cy='55' rx='28' ry='22' fill='%23f8fafc'/%3E%3Ccircle cx='40' cy='52' r='4' fill='%230f172a'/%3E%3Ccircle cx='60' cy='52' r='4' fill='%230f172a'/%3E%3Cellipse cx='50' cy='62' rx='6' ry='4' fill='%23f43f5e'/%3E%3Ccircle cx='78' cy='22' r='10' fill='%2322c55e'/%3E%3C/svg%3E">
-    <title>순심이 실시간 감시 - 보안 잠금</title>
-    <style>
-        :root {
-            --bg-color: #0b1120;
-            --card-bg: #1e293b;
-            --text-color: #f8fafc;
-            --accent: #38bdf8;
-            --alert: #ef4444;
-            --success: #22c55e;
-            --border: #334155;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }
-        .lock-card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 20px;
-            padding: 32px 24px;
-            width: 100%;
-            max-width: 360px;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
-            text-align: center;
-            animation: fadeIn 0.3s ease;
-        }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .logo-icon {
-            width: 68px;
-            height: 68px;
-            margin: 0 auto 16px;
-            background: #0f172a;
-            border: 2px solid #22c55e;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 2rem;
-            box-shadow: 0 0 16px rgba(34, 197, 94, 0.3);
-        }
-        .title { font-size: 1.35rem; font-weight: 700; color: #f8fafc; margin-bottom: 6px; }
-        .subtitle { font-size: 0.85rem; color: #94a3b8; margin-bottom: 24px; line-height: 1.4; }
-        .pin-display {
-            background: #0f172a;
-            border: 2px solid var(--border);
-            border-radius: 12px;
-            height: 52px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.6rem;
-            letter-spacing: 12px;
-            color: var(--accent);
-            margin-bottom: 20px;
-            font-family: monospace;
-            padding: 0 16px;
-            transition: all 0.2s ease;
-        }
-        .pin-display.error {
-            border-color: var(--alert);
-            color: var(--alert);
-            animation: shake 0.4s ease;
-        }
-        @keyframes shake {
-            0%, 100% { transform: translateX(0); }
-            20%, 60% { transform: translateX(-8px); }
-            40%, 80% { transform: translateX(8px); }
-        }
-        .keypad {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-        .key-btn {
-            background: #0f172a;
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            height: 54px;
-            font-size: 1.4rem;
-            font-weight: 600;
-            color: #f8fafc;
-            cursor: pointer;
-            transition: all 0.1s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            user-select: none;
-        }
-        .key-btn:active {
-            background: #334155;
-            transform: scale(0.95);
-        }
-        .key-btn.action {
-            font-size: 0.95rem;
-            color: #94a3b8;
-        }
-        .key-btn.submit {
-            background: #059669;
-            color: white;
-            border-color: #10b981;
-        }
-        .key-btn.submit:active {
-            background: #047857;
-        }
-        .msg {
-            font-size: 0.82rem;
-            color: var(--alert);
-            min-height: 20px;
-        }
-    </style>
-</head>
-<body>
-    <div class="lock-card" id="lockCard">
-        <div class="logo-icon">🐕</div>
-        <h1 class="title">순심이 감시 뷰어</h1>
-        <p class="subtitle">보안 잠금 상태입니다.<br>PIN 비밀번호를 입력해주세요.</p>
-        
-        <div class="pin-display" id="pinDisplay">····</div>
-        
-        <div class="keypad">
-            <button class="key-btn" onclick="pressKey('1')">1</button>
-            <button class="key-btn" onclick="pressKey('2')">2</button>
-            <button class="key-btn" onclick="pressKey('3')">3</button>
-            <button class="key-btn" onclick="pressKey('4')">4</button>
-            <button class="key-btn" onclick="pressKey('5')">5</button>
-            <button class="key-btn" onclick="pressKey('6')">6</button>
-            <button class="key-btn" onclick="pressKey('7')">7</button>
-            <button class="key-btn" onclick="pressKey('8')">8</button>
-            <button class="key-btn" onclick="pressKey('9')">9</button>
-            <button class="key-btn action" onclick="clearPin()">지우기</button>
-            <button class="key-btn" onclick="pressKey('0')">0</button>
-            <button class="key-btn submit" onclick="submitPin()">확인</button>
-        </div>
-        <div class="msg" id="msgText"></div>
-    </div>
+def _register_auth_routes(app: FastAPI, cfg: AppConfig) -> None:
+    """Register index, login, and logout endpoints."""
+    @app.get("/", response_class=HTMLResponse)
+    async def index(request: Request):
+        if check_auth(request, cfg):
+            return HTMLResponse(content=HTML_TEMPLATE)
+        return HTMLResponse(content=LOGIN_HTML_TEMPLATE)
 
-    <script>
-        let currentPin = "";
+    @app.post("/api/auth/login")
+    async def login(req: LoginRequest, response: Response):
+        if req.pin == cfg.viewer.pin:
+            token = compute_auth_token(cfg.viewer.pin, cfg.viewer.session_secret)
+            response.set_cookie(
+                key="soonsim_auth",
+                value=token,
+                max_age=86400 * 30,
+                httponly=True,
+                samesite="lax",
+            )
+            return {"success": True, "detail": "인증 성공"}
+        raise HTTPException(status_code=401, detail="비밀번호가 일치하지 않습니다.")
 
-        function updateDisplay() {
-            const display = document.getElementById('pinDisplay');
-            if (currentPin.length === 0) {
-                display.innerText = "····";
-                display.style.color = "#475569";
-            } else {
-                display.innerText = "●".repeat(currentPin.length);
-                display.style.color = "#38bdf8";
+    @app.post("/api/auth/logout")
+    async def logout(response: Response):
+        response.delete_cookie(key="soonsim_auth")
+        return {"success": True, "detail": "로그아웃 성공"}
+
+
+def _register_telemetry_routes(app: FastAPI, store: ViewerStateStore, cfg: AppConfig) -> None:
+    """Register telemetry and history endpoints."""
+    def require_auth(request: Request) -> None:
+        if not check_auth(request, cfg):
+            raise HTTPException(status_code=401, detail="인증이 필요합니다.")
+
+    @app.get("/api/live")
+    async def get_live(request: Request):
+        require_auth(request)
+        state = store.get_live_state()
+        return {
+            "last_poll_str": state.last_poll_str,
+            "last_poll_epoch": state.last_poll_epoch,
+            "status_title": state.status_title,
+            "status_desc": state.status_desc,
+            "status_type": state.status_type,
+            "detected_objects": state.detected_objects,
+            "dog_in_zone": state.dog_in_zone,
+            "change_score": state.change_score,
+            "total_events_30m": state.total_events_30m,
+            "interval_sec": state.interval_sec,
+        }
+
+    @app.get("/api/history")
+    async def get_history(request: Request):
+        require_auth(request)
+        return [
+            {
+                "id": r.id,
+                "timestamp_str": r.timestamp_str,
+                "timestamp_epoch": r.timestamp_epoch,
+                "detected_objects": r.detected_objects,
+                "dog_in_zone": r.dog_in_zone,
+                "event_type": r.event_type,
+                "change_score": r.change_score,
             }
-        }
-
-        function pressKey(num) {
-            if (currentPin.length < 10) {
-                currentPin += num;
-                updateDisplay();
-                document.getElementById('msgText').innerText = "";
-                document.getElementById('pinDisplay').classList.remove('error');
-            }
-        }
-
-        function clearPin() {
-            currentPin = "";
-            updateDisplay();
-            document.getElementById('msgText').innerText = "";
-            document.getElementById('pinDisplay').classList.remove('error');
-        }
-
-        async function submitPin() {
-            if (currentPin.length === 0) return;
-            try {
-                const res = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ pin: currentPin })
-                });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    window.location.reload();
-                } else {
-                    const display = document.getElementById('pinDisplay');
-                    display.classList.add('error');
-                    document.getElementById('msgText').innerText = data.detail || "비밀번호가 일치하지 않습니다.";
-                    currentPin = "";
-                    setTimeout(() => {
-                        updateDisplay();
-                    }, 400);
-                }
-            } catch (e) {
-                document.getElementById('msgText').innerText = "인증 서버 통신 실패";
-            }
-        }
-
-        // Keyboard support
-        window.addEventListener('keydown', (e) => {
-            if (e.key >= '0' && e.key <= '9') {
-                pressKey(e.key);
-            } else if (e.key === 'Backspace') {
-                currentPin = currentPin.slice(0, -1);
-                updateDisplay();
-            } else if (e.key === 'Enter') {
-                submitPin();
-            } else if (e.key === 'Escape') {
-                clearPin();
-            }
-        });
-
-        updateDisplay();
-    </script>
-</body>
-</html>
-"""
+            for r in store.get_history()
+        ]
 
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="순심이">
-    <meta name="theme-color" content="#0b1120">
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230b1120' stroke='%2322c55e' stroke-width='4'/%3E%3Cpath d='M30 40 Q20 25 35 25 Q45 25 40 40 Z' fill='%23f8fafc'/%3E%3Cpath d='M70 40 Q80 25 65 25 Q55 25 60 40 Z' fill='%23f8fafc'/%3E%3Cellipse cx='50' cy='55' rx='28' ry='22' fill='%23f8fafc'/%3E%3Ccircle cx='40' cy='52' r='4' fill='%230f172a'/%3E%3Ccircle cx='60' cy='52' r='4' fill='%230f172a'/%3E%3Cellipse cx='50' cy='62' rx='6' ry='4' fill='%23f43f5e'/%3E%3Ccircle cx='78' cy='22' r='10' fill='%2322c55e'/%3E%3C/svg%3E">
-    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%230b1120' stroke='%2322c55e' stroke-width='4'/%3E%3Cpath d='M30 40 Q20 25 35 25 Q45 25 40 40 Z' fill='%23f8fafc'/%3E%3Cpath d='M70 40 Q80 25 65 25 Q55 25 60 40 Z' fill='%23f8fafc'/%3E%3Cellipse cx='50' cy='55' rx='28' ry='22' fill='%23f8fafc'/%3E%3Ccircle cx='40' cy='52' r='4' fill='%230f172a'/%3E%3Ccircle cx='60' cy='52' r='4' fill='%230f172a'/%3E%3Cellipse cx='50' cy='62' rx='6' ry='4' fill='%23f43f5e'/%3E%3Ccircle cx='78' cy='22' r='10' fill='%2322c55e'/%3E%3C/svg%3E">
-    <title>순심이 실시간 감시 뷰어 (30분 스마트 큐)</title>
-    <style>
-        :root {
-            --bg-color: #0b1120;
-            --card-bg: #1e293b;
-            --text-color: #f8fafc;
-            --accent: #38bdf8;
-            --alert: #ef4444;
-            --success: #22c55e;
-            --warning: #f59e0b;
-            --border: #334155;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            padding: 16px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        .header {
-            width: 100%;
-            max-width: 1240px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 14px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-        .title-group {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-        .title { font-size: 1.45rem; font-weight: 700; color: var(--accent); }
-        
-        /* Header-sized Pulsating Circle and DateTime Text */
-        .polling-indicator {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            background: #0f172a;
-            border: 2px solid #334155;
-            padding: 6px 18px;
-            border-radius: 9999px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-        }
-        .pulse-dot {
-            width: 22px;
-            height: 22px;
-            border-radius: 50%;
-            background: #22c55e;
-            box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
-            animation: pulse 1.6s infinite;
-        }
-        @keyframes pulse {
-            0% { transform: scale(0.92); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.8); }
-            70% { transform: scale(1.12); box-shadow: 0 0 0 12px rgba(34, 197, 94, 0); }
-            100% { transform: scale(0.92); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
-        }
-        .poll-text {
-            font-size: 1.15rem;
-            font-weight: 700;
-            color: #f1f5f9;
-            letter-spacing: -0.3px;
-        }
-        .poll-text span {
-            color: #38bdf8;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        }
+def _register_snapshot_routes(app: FastAPI, store: ViewerStateStore, cfg: AppConfig) -> None:
+    """Register snapshot image endpoints."""
+    def require_auth(request: Request) -> None:
+        if not check_auth(request, cfg):
+            raise HTTPException(status_code=401, detail="인증이 필요합니다.")
 
-        .header-controls {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .audio-btn {
-            background: #334155;
-            color: #94a3b8;
-            border: 1px solid var(--border);
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            cursor: pointer;
-            font-weight: 600;
-            transition: all 0.2s ease;
-        }
-        .audio-btn.active {
-            background: #059669;
-            color: white;
-            border-color: #10b981;
-        }
-        .main-container {
-            width: 100%;
-            max-width: 1240px;
-            display: grid;
-            grid-template-columns: 2fr 1fr;
-            gap: 20px;
-        }
-        @media (max-width: 960px) {
-            .main-container { grid-template-columns: 1fr; }
-        }
-        .card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 16px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
-        }
-        .card-title {
-            font-size: 1.05rem;
-            margin-bottom: 12px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .live-preview {
-            width: 100%;
-            border-radius: 8px;
-            border: 2px solid var(--border);
-            aspect-ratio: 16 / 9;
-            object-fit: cover;
-            background: #000;
-        }
-        .status-banner {
-            margin-top: 14px;
-            padding: 14px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            border: 1px solid var(--border);
-            transition: all 0.3s ease;
-        }
-        .status-banner.no_change {
-            background: rgba(30, 41, 59, 0.8);
-            border-color: #475569;
-        }
-        .status-banner.motion {
-            background: rgba(245, 158, 11, 0.15);
-            border-color: var(--warning);
-        }
-        .status-banner.dog_on_pad {
-            background: rgba(34, 197, 94, 0.2);
-            border-color: var(--success);
-            animation: padGlow 1.5s infinite alternate;
-        }
-        @keyframes padGlow {
-            0% { box-shadow: 0 0 5px rgba(34, 197, 94, 0.3); }
-            100% { box-shadow: 0 0 15px rgba(34, 197, 94, 0.8); }
-        }
-        .status-icon {
-            font-size: 1.8rem;
-        }
-        .status-text-group { flex: 1; }
-        .status-headline { font-size: 1.1rem; font-weight: 700; }
-        .status-sub { font-size: 0.85rem; color: #94a3b8; margin-top: 3px; }
+    @app.get("/api/snapshot/latest")
+    async def get_latest_snapshot(request: Request):
+        require_auth(request)
+        state = store.get_live_state()
+        if not state.latest_image_bytes:
+            raise HTTPException(status_code=404, detail="No frames captured yet.")
+        return Response(content=state.latest_image_bytes, media_type="image/jpeg")
 
-        .gallery-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-        .gallery {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            max-height: 620px;
-            overflow-y: auto;
-            padding-right: 4px;
-        }
-        .gallery-item {
-            display: flex;
-            gap: 10px;
-            padding: 8px;
-            border-radius: 8px;
-            background: #0f172a;
-            border: 1px solid var(--border);
-            cursor: pointer;
-            transition: all 0.15s ease;
-        }
-        .gallery-item:hover {
-            border-color: var(--accent);
-            transform: translateX(-2px);
-        }
-        .gallery-item.DOG_ON_PAD {
-            border-color: var(--success);
-            background: #064e3b;
-        }
-        .gallery-item.MOTION_CHANGE {
-            border-color: #d97706;
-            background: #451a03;
-        }
-        .gallery-thumb {
-            width: 100px;
-            height: 60px;
-            border-radius: 6px;
-            object-fit: cover;
-        }
-        .gallery-info {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            font-size: 0.85rem;
-        }
-        .time-tag { font-weight: 600; color: var(--accent); }
-        .obj-tag { color: #94a3b8; margin-top: 2px; font-size: 0.78rem; }
-        .badge-tag {
-            display: inline-block;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-weight: 700;
-            font-size: 0.72rem;
-            width: fit-content;
-            margin-top: 4px;
-        }
-        .badge-dog { background: var(--success); color: #000; }
-        .badge-motion { background: var(--warning); color: #000; }
-        .badge-baseline { background: #64748b; color: white; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <div class="title-group">
-            <div class="title">순심이 상시 감시 뷰어</div>
-            <!-- Large Pulsating Circle and DateTime Text -->
-            <div class="polling-indicator">
-                <div class="pulse-dot"></div>
-                <div class="poll-text">감시중: <span id="pollDatetimestamp">대기 중</span></div>
-            </div>
-        </div>
-        <div class="header-controls">
-            <button class="audio-btn" id="audioToggle" onclick="toggleAudio()">소리 알림: OFF (클릭하여 켜기)</button>
-            <button class="audio-btn" style="background:#1e293b; color:#94a3b8;" onclick="logout()">🔒 잠금</button>
-        </div>
-    </div>
-
-    <div class="main-container">
-        <!-- Live Large View & Status -->
-        <div class="card">
-            <div class="card-title">
-                <span>실시간 프레임 (NOW)</span>
-                <span id="liveTimestamp" style="font-size: 0.88rem; color: #94a3b8;">대기 중...</span>
-            </div>
-            <img id="liveImage" class="live-preview" src="/api/snapshot/latest" alt="Live Stream Frame">
-
-            <!-- Real-time Scene Status Banner -->
-            <div class="status-banner no_change" id="statusBanner">
-                <div class="status-icon" id="statusIcon">🟢</div>
-                <div class="status-text-group">
-                    <div class="status-headline" id="statusHeadline">현재 변화 없음 (정적 상태)</div>
-                    <div class="status-sub" id="statusSub">5초마다 카메라를 능동 감시 중이며, 화면 및 배변판에 유의미한 변화가 없습니다.</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 30-Minute Significant Event Timeline -->
-        <div class="card">
-            <div class="gallery-header">
-                <span style="font-weight: 600; font-size: 1.05rem;">최근 30분 이벤트 타임라인</span>
-                <span id="eventCountBadge" style="font-size: 0.8rem; background: #0ea5e9; color: white; padding: 2px 8px; border-radius: 9999px;">0건</span>
-            </div>
-            <p style="font-size: 0.78rem; color: #64748b; margin-bottom: 10px;">
-                * 미미한 변화는 저장하지 않고, 배변판 진입/움직임 이벤트만 기록합니다.
-            </p>
-            <div class="gallery" id="historyGallery">
-                <div style="color: #64748b; text-align: center; padding: 30px;">최근 30분 내 감지된 이벤트가 없습니다.</div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        let audioEnabled = false;
-        let audioCtx = null;
-        let lastAlertId = 0;
-
-        function initAudio() {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-        }
-
-        function toggleAudio() {
-            initAudio();
-            audioEnabled = !audioEnabled;
-            const btn = document.getElementById('audioToggle');
-            if (audioEnabled) {
-                btn.className = 'audio-btn active';
-                btn.innerText = '소리 알림: ON (멍멍!)';
-                playDogBark();
-            } else {
-                btn.className = 'audio-btn';
-                btn.innerText = '소리 알림: OFF (클릭하여 켜기)';
-            }
-        }
-
-        function playSingleBark(startTime) {
-            if (!audioCtx) return;
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            const filter = audioCtx.createBiquadFilter();
-
-            osc.type = 'sawtooth';
-            filter.type = 'bandpass';
-            filter.frequency.setValueAtTime(450, startTime);
-            filter.Q.setValueAtTime(3.0, startTime);
-
-            osc.frequency.setValueAtTime(350, startTime);
-            osc.frequency.exponentialRampToValueAtTime(120, startTime + 0.18);
-
-            gain.gain.setValueAtTime(0.01, startTime);
-            gain.gain.linearRampToValueAtTime(0.8, startTime + 0.03);
-            gain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.20);
-
-            osc.connect(filter);
-            filter.connect(gain);
-            gain.connect(audioCtx.destination);
-
-            osc.start(startTime);
-            osc.stop(startTime + 0.22);
-        }
-
-        function playDogBark() {
-            if (!audioEnabled || !audioCtx) return;
-            initAudio();
-            const now = audioCtx.currentTime;
-            playSingleBark(now);
-            playSingleBark(now + 0.25);
-        }
-
-        async function fetchLiveStatus() {
-            try {
-                const res = await fetch('/api/live');
-                const live = await res.json();
-
-                // Display full datetimestamp (YYYY-MM-DD HH:MM:SS)
-                document.getElementById('pollDatetimestamp').innerText = live.last_poll_str;
-                document.getElementById('liveTimestamp').innerText = `최근 확인: ${live.last_poll_str}`;
-                document.getElementById('liveImage').src = `/api/snapshot/latest?t=${Date.now()}`;
-
-                const banner = document.getElementById('statusBanner');
-                const icon = document.getElementById('statusIcon');
-                const headline = document.getElementById('statusHeadline');
-                const sub = document.getElementById('statusSub');
-
-                banner.className = `status-banner ${live.status_type}`;
-                headline.innerText = live.status_title;
-                sub.innerText = live.status_desc;
-
-                if (live.status_type === 'dog_on_pad') {
-                    icon.innerText = '🐕';
-                    if (live.last_poll_epoch !== lastAlertId) {
-                        lastAlertId = live.last_poll_epoch;
-                        playDogBark();
-                    }
-                } else if (live.status_type === 'motion') {
-                    icon.innerText = '⚠️';
-                } else {
-                    icon.innerText = '🟢';
-                }
-
-                document.getElementById('eventCountBadge').innerText = `${live.total_events_30m}건`;
-
-                const histRes = await fetch('/api/history');
-                const history = await histRes.json();
-
-                const gallery = document.getElementById('historyGallery');
-                if (history.length === 0) {
-                    gallery.innerHTML = '<div style="color: #64748b; text-align: center; padding: 30px;">최근 30분 내 감지된 이벤트가 없습니다. (정적 상태 유지 중)</div>';
-                } else {
-                    gallery.innerHTML = '';
-                    [...history].reverse().forEach(item => {
-                        const div = document.createElement('div');
-                        div.className = `gallery-item ${item.event_type}`;
-                        div.onclick = () => {
-                            document.getElementById('liveImage').src = `/api/snapshot/${item.id}`;
-                            document.getElementById('liveTimestamp').innerText = `과거 이벤트 기록: ${item.timestamp_str}`;
-                        };
-
-                        let badgeClass = 'badge-baseline';
-                        let badgeText = '기준점';
-                        if (item.event_type === 'DOG_ON_PAD') {
-                            badgeClass = 'badge-dog';
-                            badgeText = '순심이 배변판';
-                        } else if (item.event_type === 'ANIMAL_DETECTED') {
-                            badgeClass = 'badge-dog';
-                            badgeText = '동물 감지';
-                        } else if (item.event_type === 'MOTION_CHANGE') {
-                            badgeClass = 'badge-motion';
-                            badgeText = `움직임 (${item.change_score.toFixed(1)})`;
-                        }
-
-                        const objs = item.detected_objects.length > 0 ? item.detected_objects.join(', ') : '화면 변화';
-
-                        div.innerHTML = `
-                            <img class="gallery-thumb" src="/api/snapshot/${item.id}" alt="thumb">
-                            <div class="gallery-info">
-                                <div class="time-tag">${item.timestamp_str.split(' ')[1]}</div>
-                                <div class="obj-tag">${objs}</div>
-                                <div class="badge-tag ${badgeClass}">${badgeText}</div>
-                            </div>
-                        `;
-                        gallery.appendChild(div);
-                    });
-                }
-            } catch (err) {
-                console.error("Error fetching live status:", err);
-            }
-        }
-
-        async function logout() {
-            try {
-                await fetch('/api/auth/logout', { method: 'POST' });
-                window.location.reload();
-            } catch (e) {
-                window.location.reload();
-            }
-        }
-
-        setInterval(fetchLiveStatus, 2500);
-        fetchLiveStatus();
-    </script>
-</body>
-</html>
-"""
+    @app.get("/api/snapshot/{record_id}")
+    async def get_snapshot(record_id: int, request: Request):
+        require_auth(request)
+        record = store.get_snapshot(record_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Snapshot not found.")
+        return Response(content=record.image_bytes, media_type="image/jpeg")
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    if check_auth(request, viewer_service.config):
-        return HTMLResponse(content=HTML_TEMPLATE)
-    return HTMLResponse(content=LOGIN_HTML_TEMPLATE)
+def create_viewer_app(
+    state_store: Optional[ViewerStateStore] = None,
+    config: Optional[AppConfig] = None,
+) -> FastAPI:
+    """Factory creating FastAPI application attached to a ViewerStateStore."""
+    cfg = config or load_config()
+    store = state_store or default_state_store
+    app_instance = FastAPI(title="Soonsim Detector - Web Viewer")
+    _register_auth_routes(app_instance, cfg)
+    _register_telemetry_routes(app_instance, store, cfg)
+    _register_snapshot_routes(app_instance, store, cfg)
+    return app_instance
 
 
-@app.post("/api/auth/login")
-async def login(req: LoginRequest, response: Response):
-    if req.pin == viewer_service.config.viewer.pin:
-        token = compute_auth_token(
-            viewer_service.config.viewer.pin,
-            viewer_service.config.viewer.session_secret,
-        )
-        response.set_cookie(
-            key="soonsim_auth",
-            value=token,
-            max_age=2592000,  # 30 days
-            httponly=True,
-            samesite="lax",
-            path="/",
-        )
-        return {"success": True, "message": "인증 성공"}
-    raise HTTPException(status_code=401, detail="비밀번호가 일치하지 않습니다.")
+app = create_viewer_app()
 
 
-@app.post("/api/auth/logout")
-async def logout(response: Response):
-    response.delete_cookie(key="soonsim_auth", path="/")
-    return {"success": True, "message": "로그아웃 완료"}
-
-
-def require_auth(request: Request):
-    if not check_auth(request, viewer_service.config):
-        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
-
-
-@app.get("/api/live")
-async def get_live(request: Request):
-    require_auth(request)
-    state = viewer_service.get_live_state()
-    return {
-        "last_poll_str": state.last_poll_str,
-        "last_poll_epoch": state.last_poll_epoch,
-        "status_title": state.status_title,
-        "status_desc": state.status_desc,
-        "status_type": state.status_type,
-        "detected_objects": state.detected_objects,
-        "dog_in_zone": state.dog_in_zone,
-        "change_score": state.change_score,
-        "total_events_30m": state.total_events_30m,
-        "interval_sec": state.interval_sec,
-    }
-
-
-@app.get("/api/history")
-async def get_history(request: Request):
-    require_auth(request)
-    history = viewer_service.get_history()
-    return [
-        {
-            "id": r.id,
-            "timestamp_str": r.timestamp_str,
-            "timestamp_epoch": r.timestamp_epoch,
-            "detected_objects": r.detected_objects,
-            "dog_in_zone": r.dog_in_zone,
-            "event_type": r.event_type,
-            "change_score": r.change_score,
-        }
-        for r in history
-    ]
-
-
-@app.get("/api/snapshot/latest")
-async def get_latest_snapshot(request: Request):
-    require_auth(request)
-    state = viewer_service.get_live_state()
-    if not state.latest_image_bytes:
-        raise HTTPException(status_code=404, detail="No frames captured yet.")
-    return Response(content=state.latest_image_bytes, media_type="image/jpeg")
-
-
-@app.get("/api/snapshot/{record_id}")
-async def get_snapshot(record_id: int, request: Request):
-    require_auth(request)
-    record = viewer_service.get_snapshot(record_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="Snapshot not found.")
-    return Response(content=record.image_bytes, media_type="image/jpeg")
-
-
-def find_available_port(start_port: int = 8080, max_attempts: int = 100) -> int:
-    """Find the first available TCP port starting from start_port."""
-    for port in range(start_port, start_port + max_attempts):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("0.0.0.0", port))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError(f"Could not find an available port in range {start_port} - {start_port + max_attempts}")
-
-
-def main():
-    import uvicorn
-    parser = argparse.ArgumentParser(description="Soonsim Detector Live Debug Viewer (30m Smart Queue)")
-    parser.add_argument("--port", "-p", type=int, default=8080, help="Starting port number")
-    args = parser.parse_args()
-
-    port = find_available_port(start_port=args.port)
-    print("\n==================================================================")
-    print(" Soonsim Detector 30-Min Smart Live Viewer Started!")
-    print(f" URL: http://localhost:{port}")
-    print("==================================================================\n")
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+def main() -> None:
+    """Run unified detector and viewer daemon."""
+    from src.main import main as run_detector
+    run_detector()
 
 
 if __name__ == "__main__":
