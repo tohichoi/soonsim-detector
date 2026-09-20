@@ -25,7 +25,7 @@ polygon = [
 [detector]
 model_name = "yolov8n.pt"
 confidence_threshold = 0.3
-dog_class_id = 16
+animal_class_ids = [15, 16]
 track_thresh = 0.25
 match_thresh = 0.8
 

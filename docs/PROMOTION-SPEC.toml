@@ -1,0 +1,72 @@
+# PROMOTION-SPEC.toml
+# Soonsim Detector - ATD 포트폴리오 연동 단일 규격 (SSOT)
+
+[project]
+id = "soonsim-detector"
+title = "Soonsim Detector"
+subtitle = "3시간 만에 완성된 AI 기반 반려견 자동 감시 및 스마트 영상 알림 시스템"
+category = "Vision AI & IoT"
+status = "Completed"
+development_time = "3시간 11분 12초"
+cost_reduction = "99.0% 절감"
+lead_director = "Mike (Managing Director)"
+thumbnail = "assets/detection_01_thumb.jpg"
+live_demo_url = "https://blend-replay-canary.ngrok-free.dev"
+repository_url = "https://github.com/tohichoi/soonsim-detector"
+video_demo = "assets/detection_01_on_pad.mp4"
+pdf_report = ""
+
+[[participating_agents]]
+name = "Leo"
+role = "System Architect"
+contribution = "2단계 절전형 감시 구조 및 파이프라인 인터페이스 설계, 감시 데몬·웹 뷰어 단일 프로세스 통합 아키텍처 수립"
+
+[[participating_agents]]
+name = "Kai"
+role = "Backend Developer"
+contribution = "RTSP 스트림 버퍼링, 2단계 움직임 감지 엔진, YOLOv8 강아지 식별 및 텔레그램 영상 전송 구현"
+
+[[participating_agents]]
+name = "Maya"
+role = "Frontend Developer"
+contribution = "모바일 반응형 웹 관제 뷰어, PIN 보안 잠금 화면, 2.5초 실시간 갱신, 30분 이벤트 타임라인 및 시어터 모달 UI 개발"
+
+[[participating_agents]]
+name = "Elena"
+role = "Chief Auditor"
+contribution = "코드 품질 무관용 감사, 민감정보/자격증명 누출 차단 검증, 전 항목 PASS 승인"
+
+[[participating_agents]]
+name = "Noah"
+role = "Test Optimizer"
+contribution = "원터치 배포 및 설치 스크립트 검증, 2단계 감지 시나리오 단위/통합 테스트 최적화"
+
+[[participating_agents]]
+name = "Axel"
+role = "DevOps Platform"
+contribution = "시놀로지 NAS(DS923+) Docker Compose 원격 자동 배포 파이프라인 구축, 컨테이너 격리 및 리소스 1% 미만 상시 구동 구성"
+
+[[participating_agents]]
+name = "Chloe"
+role = "DevOps Pipeline"
+contribution = "ngrok 영구 고정 도메인 보안 터널링 연동, PIN 잠금 및 HttpOnly 세션 쿠키 인증 거버넌스, 컨테이너 배포 헬스체크"
+
+[[metrics]]
+label = "총 소요 시간"
+value = "3.18시간"
+subtext = "전통 외주 대비 99.3% 단축"
+
+[[metrics]]
+label = "개발 비용"
+value = "10만 원 미만"
+subtext = "순수 외주비 99.0% 이상 절감"
+
+[[metrics]]
+label = "디렉터 투입"
+value = "단 3시간 11분"
+subtext = "디렉터 관리 공수 95% 절약"
+
+[[metrics]]
+label = "품질 검증"
+value = "100% PASS"
+subtext = "20개 단위·통합 테스트 전 항목 통과"

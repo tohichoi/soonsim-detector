@@ -9,7 +9,7 @@ def test_load_config_default_fallback():
     config = load_config("config/config.example.toml")
     assert config.camera.fps == 15
     assert len(config.zone.polygon) >= 3
-    assert config.detector.dog_class_id == 16
+    assert config.detector.animal_class_ids == [15, 16]
     assert config.recorder.pre_buffer_sec == 5
 
 
