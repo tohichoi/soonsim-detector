@@ -22,6 +22,16 @@ debug_output/
 *.jpeg
 *.png
 
+# Promotional media assets (tracked despite the global media ignore above)
+!docs/assets/
+!docs/assets/**
+
+# Raw pipeline output (soonsim_YYYYMMDD_HHMMSS.mp4) — never commit these.
+# The pipeline writes MPEG-4 Part 2, which browsers cannot play, and the
+# portfolio build copies docs/assets/ verbatim regardless of gitignore.
+# Re-encode to H.264 first; see detection_01_on_pad.mp4 for the expected form.
+docs/assets/soonsim_*.mp4
+
 # Model Weights (Downloaded on demand)
 *.pt
 *.onnx
