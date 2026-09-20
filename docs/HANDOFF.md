@@ -1,7 +1,7 @@
 # Soonsim Detector 인수인계서 (HANDOFF)
 
 - 작성일: 2026-09-20
-- 최종 갱신: 2026-09-20 (커밋 `3ae3cc0` 기준)
+- 최종 갱신: 2026-09-20 (커밋 `612dfd4` 기준)
 - 총괄: Mike (Managing Director)
 - 참여 에이전트:
   - Executive Staff: Atlas (전략 조율 및 파이프라인 총괄)
@@ -30,7 +30,7 @@ Synology NAS(DS923+)에 상시 가동 컨테이너로 배포되었으며, 외부
 
 ## 2. 컴포넌트 아키텍처 및 모듈 맵
 
-- `src/config.py`: `tomllib` + `pydantic` 기반 설정 관리자 (카메라, 배변판, 텔레그램, 뷰어 `enabled`/`host`/`port`/`pin`/`session_secret`/`retention_sec`).
+- `src/config.py`: `tomllib` + `pydantic` 기반 설정 관리자 (카메라, 배변판, 텔레그램, 뷰어 `enabled`/`host`/`port`/`pin`/`retention_sec`).
 - `src/capture/stream.py`: `VideoStreamReader` (RTSP 자동 재연결/파일 루프) & `RingBuffer` (5초 슬라이딩 윈도우).
 - `src/detector/model.py`: `DogDetector` (YOLOv8n ONNX CPU 다중 동물 클래스 15/16 필터).
 - `src/detector/motion_gate.py`: `MotionGate` (프레임 차분 기반 2단계 모션 게이팅, 무동작 시 YOLO 추론 0회).
@@ -86,12 +86,20 @@ uv run pytest
 
 - 원격 저장소: `git@github.com:tohichoi/soonsim-detector.git`
 - 기본 브랜치: `main`
-- 최신 커밋: `3ae3cc0` (`feat: integrate unified RTSP architecture and Netflix-style theater modal UI`)
+- 최신 커밋: `612dfd4` (`chore(deploy): move NGROK_AUTHTOKEN out of the tracked compose file`)
 - 작업 트리 상태: Clean (모든 소스 및 설정 동기화 완료)
 
 ### 보안 항목 이력
 - **해결됨**: `docker-compose.yml`에 평문으로 커밋되어 있던 `NGROK_AUTHTOKEN`을 ngrok 대시보드에서 재발급(rotate)하고, `.env`(gitignore 대상) + `env_file` 방식으로 이전했습니다. 추적 파일에는 더 이상 토큰이 없습니다.
-- 옛 토큰은 Git 히스토리에 남아 있으나 재발급으로 무효화되었습니다.
+- 옛 토큰은 Git 히스토리에 남아 있으나 **대시보드에서 폐기(revoke)** 하여 무효화했습니다. 주의: 재발급만으로는 옛 토큰이 무효화되지 않습니다(재발급 직후에도 옛 토큰으로 터널이 동작했음). 반드시 별도로 폐기해야 합니다.
+- 폐기 후 검증: 기존 터널이 HTTP 200으로 유지되고 ngrok 로그에 인증 오류가 없음 → NAS가 새 토큰으로 터널링 중임을 확인.
+
+### 인증 취약점 수정 이력 (2026-09-20)
+- **문제**: 세션 쿠키가 `sha256("<PIN>:<session_secret>")` 로 계산되어, PIN(4자리 = 10,000가지)과 공개된 기본 `session_secret` 만 알면 **로그인 요청 없이 오프라인에서 쿠키를 위조**할 수 있었습니다. `check_auth` 의 `==` 비교도 상수시간이 아니었습니다.
+- **수정**: 세션을 `secrets.token_urlsafe(32)` 로 생성한 불투명 토큰으로 교체하고 서버 메모리(`SessionStore`)에 보관합니다. PIN 에서 파생되는 값이 없어져 위조 경로가 사라집니다. PIN 비교는 `secrets.compare_digest` 로 변경했습니다.
+- **추가**: `LoginThrottle` 로 연속 5회 실패 시 5분간 잠급니다(전역 카운터 — 단일 가구용이라 per-IP 보다 단순하면서 우회가 어렵습니다). 429 응답은 로그인 화면에 그대로 표시됩니다.
+- **설정 변경**: `session_secret` 필드는 더 이상 쓰이지 않아 `config.py` 와 설정 파일에서 제거했습니다. 기존 `config.toml` 에 남아 있어도 pydantic 이 무시하므로 그대로 동작합니다.
+- **동작 변경**: 세션이 메모리에만 있으므로 **재시작(배포) 후 다시 로그인**해야 합니다. 기존에는 쿠키가 결정적이라 재시작 후에도 유지됐습니다.
 
 ### `.env` 관리
 - `NGROK_AUTHTOKEN`은 루트의 `.env`에 있습니다. `.gitignore`의 `*.env` 규칙으로 제외되므로 커밋되지 않습니다.

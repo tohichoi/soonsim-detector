@@ -4,7 +4,7 @@ import time
 from fastapi.testclient import TestClient
 import numpy as np
 from src.config import AppConfig
-from src.viewer.app import compute_auth_token, create_viewer_app
+from src.viewer.app import create_viewer_app
 from src.viewer.server import ViewerServer, find_available_port
 from src.viewer.state import ViewerStateStore
 
@@ -65,8 +65,8 @@ def test_create_viewer_app_with_custom_store():
     app = create_viewer_app(state_store=store, config=config)
     client = TestClient(app)
 
-    token = compute_auth_token(config.viewer.pin, config.viewer.session_secret)
-    client.cookies.set("soonsim_auth", token)
+    login = client.post("/api/auth/login", json={"pin": config.viewer.pin})
+    assert login.status_code == 200
 
     store.update_live("배변판 진입", "진입함", "dog_on_pad", ["dog"], True, 10.0, b"jpegdata")
     res = client.get("/api/live")
