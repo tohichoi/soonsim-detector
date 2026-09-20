@@ -54,7 +54,6 @@ class ViewerConfig(BaseModel):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8080, ge=1, le=65535)
     pin: str = Field(default="1290")
-    session_secret: str = Field(default="soonsim-viewer-auth-token-salt")
     retention_sec: float = Field(default=1800.0, ge=60.0)
 
 
