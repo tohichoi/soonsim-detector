@@ -89,5 +89,10 @@ uv run pytest
 - 최신 커밋: `3ae3cc0` (`feat: integrate unified RTSP architecture and Netflix-style theater modal UI`)
 - 작업 트리 상태: Clean (모든 소스 및 설정 동기화 완료)
 
-### 미해결 보안 항목
-- `docker-compose.yml`의 `NGROK_AUTHTOKEN`이 평문으로 커밋되어 있음. `.env` + `env_file` 또는 NAS 측 환경변수 주입으로 이전 필요. 토큰이 이미 Git 히스토리에 남아 있으므로 ngrok 대시보드에서 재발급(rotate) 후 교체할 것.
+### 보안 항목 이력
+- **해결됨**: `docker-compose.yml`에 평문으로 커밋되어 있던 `NGROK_AUTHTOKEN`을 ngrok 대시보드에서 재발급(rotate)하고, `.env`(gitignore 대상) + `env_file` 방식으로 이전했습니다. 추적 파일에는 더 이상 토큰이 없습니다.
+- 옛 토큰은 Git 히스토리에 남아 있으나 재발급으로 무효화되었습니다.
+
+### `.env` 관리
+- `NGROK_AUTHTOKEN`은 루트의 `.env`에 있습니다. `.gitignore`의 `*.env` 규칙으로 제외되므로 커밋되지 않습니다.
+- `scripts/deploy.sh`의 rsync는 `.env`를 제외하지 않으므로 NAS로 함께 전송됩니다. 토큰을 바꾼 뒤에는 `reload_config.sh`가 아니라 **`deploy.sh`** 를 실행해야 반영됩니다.
