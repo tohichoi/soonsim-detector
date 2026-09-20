@@ -59,7 +59,7 @@ class SoonsimService:
         self.detector = DogDetector(
             model_name=self.config.detector.model_name,
             confidence_threshold=self.config.detector.confidence_threshold,
-            class_ids=[15, 16],
+            class_ids=self.config.detector.animal_class_ids,
             max_threads=self.config.detector.max_threads,
         )
         self.motion_gate = MotionGate(
