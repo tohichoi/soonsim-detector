@@ -27,8 +27,10 @@ services:
     container_name: soonsim-ngrok
     restart: unless-stopped
     network_mode: "host"
-    environment:
-      - NGROK_AUTHTOKEN=3JYNypPzZky0nRSORm8yxpfXFvz_6XjsTSoDXSTom7UCmikK9
+    # NGROK_AUTHTOKEN lives in .env (gitignored) so it never lands in a tracked
+    # file again — it is already in this repo's history once and had to be rotated.
+    env_file:
+      - .env
     command:
       - "http"
       - "--url=blend-replay-canary.ngrok-free.dev"
