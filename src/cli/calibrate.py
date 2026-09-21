@@ -84,6 +84,40 @@ def is_bowtie(points: List[Tuple[int, int]]) -> bool:
     return _segments_cross(a, b, c, d) or _segments_cross(b, c, d, a)
 
 
+def _line_through(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Homogeneous line through two points."""
+    (ax, ay), (bx, by) = a, b
+    return np.array([ay - by, bx - ax, ax * by - ay * bx], dtype=float)
+
+
+def roll_from_quad(points: List[Tuple[int, int]]) -> Optional[float]:
+    """Camera roll implied by a photograph of the pad, in degrees.
+
+    The pad is a flat rectangle, so its two pairs of opposite edges converge to
+    two vanishing points. Both lie on the horizon, and the horizon is level in
+    the image exactly when the camera is not rolled -- so the horizon's tilt is
+    the roll, with no known-vertical reference needed in the scene.
+
+    Built from the vanishing line rather than from two divided points, because a
+    camera with no yaw puts one of the vanishing points at infinity.
+
+    Corners must be the pad's real corners, in perimeter order; a hand-drawn
+    region that is not the pad gives a meaningless answer.
+    """
+    if len(points) != CORNER_COUNT:
+        return None
+    p0, p1, p2, p3 = (np.asarray(p, dtype=float) for p in points)
+    vp1 = np.cross(_line_through(p0, p1), _line_through(p2, p3))
+    vp2 = np.cross(_line_through(p1, p2), _line_through(p3, p0))
+    if np.allclose(vp1, 0) or np.allclose(vp2, 0):
+        return None
+    a, b, _ = np.cross(vp1, vp2)
+    if abs(a) < 1e-9 and abs(b) < 1e-9:
+        return None
+    angle = float(np.degrees(np.arctan2(a, -b)))
+    return (angle + 90.0) % 180.0 - 90.0
+
+
 class PolygonPicker:
     """Collects four clicks on a frame and renders the polygon as it grows."""
 
@@ -128,6 +162,12 @@ class PolygonPicker:
             lines.append(f"cursor {self.cursor[0]}, {self.cursor[1]}")
         if is_bowtie(self.points):
             lines.append("BOWTIE: corners cross over - reset and click around the pad")
+        elif len(self.points) == CORNER_COUNT:
+            roll = roll_from_quad(self.points)
+            lines.append(
+                "pad rect gives no roll" if roll is None
+                else f"pad rect implies camera roll {roll:+.1f} deg"
+            )
 
         for row, text in enumerate(lines):
             origin = (10, 30 + row * 22)
@@ -212,6 +252,12 @@ def calibrate(source: Optional[str], snapshot_only: bool) -> None:
 
     cv2.imwrite(str(PREVIEW_PATH), picker.render())
     console.print(f"[green]Preview saved:[/green] {PREVIEW_PATH}")
+
+    roll = roll_from_quad(points)
+    if roll is not None:
+        console.print(f"[cyan]Camera roll implied by the pad rectangle:[/cyan] {roll:+.1f} deg")
+        console.print("[dim]Non-zero means the camera is tilted; the zone anchor points sit off the feet by that much.[/dim]")
+
     console.print("\nPaste this into the [zone] section of config.toml:\n")
     console.print(polygon_toml(points))
     console.print("\nThen apply it with [bold]./scripts/reload_config.sh[/bold]")
