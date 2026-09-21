@@ -8,19 +8,50 @@ Keys:  left click = add corner, right click / u = undo, r = reset, g = grid,
 """
 
 import argparse
+import shutil
+import sysconfig
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import cv2
+# OpenCV's bundled Qt no longer ships fonts, so a fresh install has no
+# cv2/qt/fonts and every Qt-drawn string in the window comes out blank
+# ("QFontDatabase: Cannot find font directory ..."). Lend it a system font.
+# QT_QPA_FONTDIR does not help: the plugin looks in cv2/qt/fonts regardless.
+# This has to run before cv2 initialises the Qt plugin, hence before the import.
+SYSTEM_FONT_DIRS = (
+    Path("/usr/share/fonts/truetype/dejavu"),
+    Path("/usr/share/fonts/truetype/liberation"),
+    Path("/Library/Fonts"),
+)
+QT_FONT_DIR = Path(sysconfig.get_paths()["purelib"]) / "cv2" / "qt" / "fonts"
+
+
+def ensure_qt_fonts() -> bool:
+    """Copy a system font into cv2's Qt font directory when it is missing."""
+    if any(QT_FONT_DIR.glob("*.ttf")):
+        return False
+    for source in SYSTEM_FONT_DIRS:
+        fonts = sorted(source.glob("*.ttf"))[:2] if source.is_dir() else []
+        if fonts:
+            QT_FONT_DIR.mkdir(parents=True, exist_ok=True)
+            for font in fonts:
+                shutil.copy2(font, QT_FONT_DIR / font.name)
+            return True
+    return False
+
+
+ensure_qt_fonts()
+
+import cv2  # noqa: E402  (must follow ensure_qt_fonts)
 import numpy as np
 from rich.console import Console
 
+from src.cli.quad_geometry import CORNER_COUNT, is_bowtie, roll_from_quad
 from src.config import load_config
 
 console = Console()
 
 WINDOW = "soonsim pad calibration"
-CORNER_COUNT = 4
 GRID_STEP = 50
 GRID_COLOR = (0, 255, 255)
 POINT_COLOR = (0, 0, 255)
@@ -59,63 +90,6 @@ def grab_frame(source: str) -> Optional[np.ndarray]:
     ok, frame = capture.read()
     capture.release()
     return frame if ok else None
-
-
-def _segments_cross(a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray) -> bool:
-    """True when segment ab crosses segment cd, ignoring shared endpoints."""
-
-    def side(p: np.ndarray, q: np.ndarray, r: np.ndarray) -> float:
-        # numpy 2 dropped 2-D np.cross, so compute the scalar cross product by hand
-        pq, pr = q - p, r - p
-        return float(pq[0] * pr[1] - pq[1] * pr[0])
-
-    if {tuple(a), tuple(b)} & {tuple(c), tuple(d)}:
-        return False
-    d1, d2 = side(c, d, a), side(c, d, b)
-    d3, d4 = side(a, b, c), side(a, b, d)
-    return d1 * d2 < 0 and d3 * d4 < 0
-
-
-def is_bowtie(points: List[Tuple[int, int]]) -> bool:
-    """True when the four corners cross over, which fills the wrong region."""
-    if len(points) != CORNER_COUNT:
-        return False
-    a, b, c, d = (np.array(p, dtype=float) for p in points)
-    return _segments_cross(a, b, c, d) or _segments_cross(b, c, d, a)
-
-
-def _line_through(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Homogeneous line through two points."""
-    (ax, ay), (bx, by) = a, b
-    return np.array([ay - by, bx - ax, ax * by - ay * bx], dtype=float)
-
-
-def roll_from_quad(points: List[Tuple[int, int]]) -> Optional[float]:
-    """Camera roll implied by a photograph of the pad, in degrees.
-
-    The pad is a flat rectangle, so its two pairs of opposite edges converge to
-    two vanishing points. Both lie on the horizon, and the horizon is level in
-    the image exactly when the camera is not rolled -- so the horizon's tilt is
-    the roll, with no known-vertical reference needed in the scene.
-
-    Built from the vanishing line rather than from two divided points, because a
-    camera with no yaw puts one of the vanishing points at infinity.
-
-    Corners must be the pad's real corners, in perimeter order; a hand-drawn
-    region that is not the pad gives a meaningless answer.
-    """
-    if len(points) != CORNER_COUNT:
-        return None
-    p0, p1, p2, p3 = (np.asarray(p, dtype=float) for p in points)
-    vp1 = np.cross(_line_through(p0, p1), _line_through(p2, p3))
-    vp2 = np.cross(_line_through(p1, p2), _line_through(p3, p0))
-    if np.allclose(vp1, 0) or np.allclose(vp2, 0):
-        return None
-    a, b, _ = np.cross(vp1, vp2)
-    if abs(a) < 1e-9 and abs(b) < 1e-9:
-        return None
-    angle = float(np.degrees(np.arctan2(a, -b)))
-    return (angle + 90.0) % 180.0 - 90.0
 
 
 class PolygonPicker:

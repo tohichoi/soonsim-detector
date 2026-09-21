@@ -4,7 +4,8 @@ import tomllib
 
 import numpy as np
 
-from src.cli.calibrate import is_bowtie, polygon_toml, roll_from_quad
+from src.cli.calibrate import polygon_toml
+from src.cli.quad_geometry import is_bowtie, roll_from_quad
 
 PROPER = [(170, 50), (400, 40), (550, 320), (210, 350)]
 CROSSED = [(170, 50), (550, 320), (400, 40), (210, 350)]
