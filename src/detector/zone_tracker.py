@@ -79,6 +79,10 @@ class ZoneTracker:
         self._current_event_detections: List[sv.Detections] = []
         self._current_event_telemetry: List[FrameTelemetry] = []
 
+        # Diagnostic state of the most recent frame, so callers that only render
+        # the live frame (the viewer) can overlay the same HUD as exported clips.
+        self.last_telemetry: FrameTelemetry = self._empty_telemetry()
+
     def _lost_track_remaining(self) -> List[Tuple[int, int]]:
         """Read ByteTrack internals for lost tracks' remaining frames before drop."""
         try:
@@ -130,12 +134,11 @@ class ZoneTracker:
         self,
         packet: FramePacket,
         tracked_detections: sv.Detections,
-        dog_in_zone: bool,
     ) -> None:
         """Append frame, detections, and telemetry in lockstep."""
         self._current_event_frames.append(packet)
         self._current_event_detections.append(tracked_detections)
-        self._current_event_telemetry.append(self._build_telemetry(packet, tracked_detections, dog_in_zone))
+        self._current_event_telemetry.append(self.last_telemetry)
 
     def update(
         self,
@@ -147,6 +150,7 @@ class ZoneTracker:
         tracked_detections = self.tracker.update_with_detections(detections)
         is_in_zone = self.zone.trigger(detections=tracked_detections)
         dog_in_zone = bool(np.any(is_in_zone)) if len(is_in_zone) > 0 else False
+        self.last_telemetry = self._build_telemetry(packet, tracked_detections, dog_in_zone)
 
         completed_event: Optional[CompletedEvent] = None
 
@@ -157,15 +161,15 @@ class ZoneTracker:
                 self.event_start_time = pre_buffer_frames[0].timestamp if pre_buffer_frames else packet.timestamp
                 self._current_event_frames = list(pre_buffer_frames) + [packet]
                 self._current_event_detections = [sv.Detections.empty()] * len(pre_buffer_frames) + [tracked_detections]
-                self._current_event_telemetry = [self._empty_telemetry()] * len(pre_buffer_frames) + [self._build_telemetry(packet, tracked_detections, dog_in_zone)]
+                self._current_event_telemetry = [self._empty_telemetry()] * len(pre_buffer_frames) + [self.last_telemetry]
         elif self.status == EventStatus.ACTIVE:
             if not dog_in_zone:
                 self.status = EventStatus.COOLDOWN
                 self.stay_end_time = packet.timestamp
                 self.cooldown_counter = 0
-            self._record_frame(packet, tracked_detections, dog_in_zone)
+            self._record_frame(packet, tracked_detections)
         elif self.status == EventStatus.COOLDOWN:
-            self._record_frame(packet, tracked_detections, dog_in_zone)
+            self._record_frame(packet, tracked_detections)
             if dog_in_zone:
                 self.status = EventStatus.ACTIVE
                 self.cooldown_counter = 0

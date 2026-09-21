@@ -70,3 +70,18 @@ def test_zone_tracker_lifecycle():
         else:
             assert event is None
             assert tracker.status == EventStatus.COOLDOWN
+
+
+def test_last_telemetry_is_available_outside_events():
+    """The viewer renders every frame, including IDLE ones, so telemetry must exist there."""
+    polygon = [(100, 100), (300, 100), (300, 300), (100, 300)]
+    tracker = ZoneTracker(polygon=polygon, fps=10, lost_track_buffer_sec=2.0)
+
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    packet = FramePacket(frame=frame, timestamp=1.0, frame_idx=1)
+    tracker.update(packet, sv.Detections.empty(), [])
+
+    assert tracker.last_telemetry.status == EventStatus.IDLE
+    # A zero buffer total means the frame was never handed to _build_telemetry(),
+    # which is exactly how the HUD silently vanished from the live view.
+    assert tracker.last_telemetry.lost_buffer_total > 0

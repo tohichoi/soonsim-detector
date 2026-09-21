@@ -152,7 +152,11 @@ class SoonsimService:
 
         self._last_viewer_update_t = now
         annotated = self.annotator.annotate(
-            packet.frame, dets, timestamp=packet.timestamp, is_dog_in_zone=in_zone
+            packet.frame,
+            dets,
+            timestamp=packet.timestamp,
+            is_dog_in_zone=in_zone,
+            telemetry=self.tracker.last_telemetry,
         )
         _, img_encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         img_bytes = img_encoded.tobytes()
