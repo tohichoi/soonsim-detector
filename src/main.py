@@ -77,6 +77,7 @@ class SoonsimService:
             track_thresh=self.config.detector.track_thresh,
             match_thresh=self.config.detector.match_thresh,
             fps=self.config.camera.fps,
+            lost_track_buffer_sec=self.config.detector.lost_track_buffer_sec,
             post_buffer_sec=self.config.recorder.post_buffer_sec,
             min_stay_duration_sec=self.config.recorder.min_stay_duration_sec,
         )

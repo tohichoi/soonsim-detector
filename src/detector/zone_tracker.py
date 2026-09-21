@@ -33,6 +33,7 @@ class ZoneTracker:
         track_thresh: float = 0.25,
         match_thresh: float = 0.8,
         fps: int = 15,
+        lost_track_buffer_sec: float = 2.0,
         post_buffer_sec: int = 5,
         min_stay_duration_sec: float = 1.0,
     ):
@@ -44,7 +45,7 @@ class ZoneTracker:
         )
         self.tracker = sv.ByteTrack(
             track_activation_threshold=track_thresh,
-            lost_track_buffer=fps * 2,
+            lost_track_buffer=max(1, int(round(lost_track_buffer_sec * fps))),
             minimum_matching_threshold=match_thresh,
             frame_rate=fps,
         )

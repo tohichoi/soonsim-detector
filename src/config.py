@@ -29,6 +29,7 @@ class DetectorConfig(BaseModel):
     animal_class_ids: List[int] = Field(default=[15, 16])
     track_thresh: float = Field(default=0.20, ge=0.1, le=1.0)
     match_thresh: float = Field(default=0.8, ge=0.1, le=1.0)
+    lost_track_buffer_sec: float = Field(default=2.0, ge=0.5, le=30.0)
     inference_interval_frames: int = Field(default=5, ge=1, le=30)
     motion_gate_enabled: bool = Field(default=True)
     motion_threshold: float = Field(default=4.0, ge=0.5, le=50.0)
