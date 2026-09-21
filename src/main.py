@@ -18,6 +18,7 @@ from src.cli.dashboard import Dashboard
 from src.config import load_config
 from src.detector.model import DogDetector
 from src.detector.motion_gate import MotionGate
+from src.detector.zone_contact import LOG_NAME, ZoneContactLog
 from src.detector.zone_tracker import CompletedEvent, EventStatus, ZoneTracker
 from src.notifier.telegram import TelegramNotifier
 from src.recorder.annotator import HighContrastAnnotator
@@ -69,6 +70,9 @@ class SoonsimService:
             enabled=self.config.detector.motion_gate_enabled,
         )
         self.telemetry = InferenceTelemetry(log_dir=self.config.recorder.output_dir)
+        self.contact_log = ZoneContactLog(
+            Path(self.config.recorder.output_dir) / LOG_NAME
+        )
         self.cached_detections = sv.Detections.empty()
 
     def _init_recorder_and_viewer(self) -> None:
@@ -81,6 +85,7 @@ class SoonsimService:
             lost_track_buffer_sec=self.config.detector.lost_track_buffer_sec,
             post_buffer_sec=self.config.recorder.post_buffer_sec,
             min_stay_duration_sec=self.config.recorder.min_stay_duration_sec,
+            contact_log=self.contact_log,
         )
         self.annotator = HighContrastAnnotator(
             zone=self.tracker.zone,

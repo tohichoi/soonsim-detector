@@ -20,6 +20,8 @@ rsync -avz --delete -e "ssh" --rsync-path="/bin/rsync" \
     --exclude '.git' \
     --exclude 'records/*.mp4' \
     --exclude 'records/*.jpg' \
+    --exclude 'records/*.log' \
+    --exclude 'records/*.jsonl' \
     --exclude '.pytest_cache' \
     ./ "${REMOTE_HOST}:${REMOTE_DIR}/"
 

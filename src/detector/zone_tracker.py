@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import supervision as sv
 from src.capture.stream import FramePacket
+from src.detector.zone_contact import ContactMetrics, PadGeometry, ZoneContactLog
 
 
 class EventStatus(str, Enum):
@@ -24,6 +25,9 @@ class FrameTelemetry:
     tracked_ids: Tuple[int, ...]
     lost_remaining: Tuple[Tuple[int, int], ...]
     lost_buffer_total: int
+    # Contact metrics, measured for tuning and not yet part of the verdict.
+    margin: Optional[float] = None
+    overlap: float = 0.0
 
 
 @dataclass
@@ -48,6 +52,7 @@ class ZoneTracker:
         lost_track_buffer_sec: float = 2.0,
         post_buffer_sec: int = 5,
         min_stay_duration_sec: float = 1.0,
+        contact_log: Optional[ZoneContactLog] = None,
     ):
         self.polygon_np = np.array(polygon, dtype=np.int32)
         self.zone = sv.PolygonZone(
@@ -55,6 +60,9 @@ class ZoneTracker:
             triggering_anchors=(sv.Position.CENTER, sv.Position.BOTTOM_CENTER),
             require_all_anchors=False,
         )
+        # Measured every frame, recorded to contact_log, not yet part of the verdict.
+        self.pad_geometry = PadGeometry(self.zone.mask)
+        self.contact_log = contact_log
         self.tracker = sv.ByteTrack(
             track_activation_threshold=track_thresh,
             # supervision scales lost_track_buffer against a 30fps reference
@@ -82,6 +90,7 @@ class ZoneTracker:
         # Diagnostic state of the most recent frame, so callers that only render
         # the live frame (the viewer) can overlay the same HUD as exported clips.
         self.last_telemetry: FrameTelemetry = self._empty_telemetry()
+        self.last_contact: Optional[ContactMetrics] = None
 
     def _lost_track_remaining(self) -> List[Tuple[int, int]]:
         """Read ByteTrack internals for lost tracks' remaining frames before drop."""
@@ -117,6 +126,8 @@ class ZoneTracker:
             tracked_ids=tracker_ids,
             lost_remaining=tuple(self._lost_track_remaining()),
             lost_buffer_total=self._lost_buffer_total(),
+            margin=self.last_contact.margin if self.last_contact else None,
+            overlap=self.last_contact.overlap if self.last_contact else 0.0,
         )
 
     @staticmethod
@@ -150,6 +161,20 @@ class ZoneTracker:
         tracked_detections = self.tracker.update_with_detections(detections)
         is_in_zone = self.zone.trigger(detections=tracked_detections)
         dog_in_zone = bool(np.any(is_in_zone)) if len(is_in_zone) > 0 else False
+        self.last_contact = self.pad_geometry.largest(tracked_detections)
+        if self.contact_log is not None:
+            self.contact_log.record(
+                frame_idx=packet.frame_idx,
+                timestamp=packet.timestamp,
+                status=self.status.value,
+                track_ids=(
+                    tuple(int(i) for i in tracked_detections.tracker_id)
+                    if tracked_detections.tracker_id is not None
+                    else ()
+                ),
+                metrics=self.last_contact,
+                in_zone=dog_in_zone,
+            )
         self.last_telemetry = self._build_telemetry(packet, tracked_detections, dog_in_zone)
 
         completed_event: Optional[CompletedEvent] = None

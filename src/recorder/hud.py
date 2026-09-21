@@ -40,6 +40,7 @@ class TelemetryHud:
         ratio, label, color = self._track(telemetry)
         y = self._row(frame, x, y, "track", label, color, ratio)
         y = self._row(frame, x, y, "state", telemetry.status.value, self._state_color(telemetry.status), None)
+        y = self._row(frame, x, y, "pad", self._pad_value(telemetry), self._pad_color(telemetry), None)
         ratio, label, color = self._stay(telemetry)
         self._row(frame, x, y, "stay", label, color, ratio)
         return frame
@@ -66,6 +67,17 @@ class TelemetryHud:
         ratio = min(t.stay_sec / self.min_stay_sec, 1.0)
         color = self.good if t.stay_sec >= self.min_stay_sec else self.warn
         return ratio, f"{t.stay_sec:.1f}s", color
+
+    def _pad_value(self, t: FrameTelemetry) -> str:
+        """Contact line against the pad: margin above overlap, both for tuning."""
+        if t.margin is None:
+            return "-"
+        return f"{t.margin:+.2f}/{t.overlap:.2f}"
+
+    def _pad_color(self, t: FrameTelemetry):
+        if t.margin is None:
+            return self.muted
+        return self.good if t.margin <= 0.0 else self.warn
 
     def _state_color(self, status: EventStatus):
         if status == EventStatus.ACTIVE:
