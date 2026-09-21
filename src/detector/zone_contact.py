@@ -15,6 +15,7 @@ where the thresholds belong, and replayable afterwards.
 """
 
 import json
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional, Sequence
@@ -22,6 +23,7 @@ from typing import Optional, Sequence
 import numpy as np
 
 EDGE_SAMPLES = 64
+MAX_BYTES = 5 * 1024 * 1024
 LOG_NAME = "zone_contact.jsonl"
 
 
@@ -79,12 +81,24 @@ class PadGeometry:
 
 
 class ZoneContactLog:
-    """Append-only JSONL of per-frame contact metrics, one line per frame."""
+    """Append-only JSONL of per-frame contact metrics plus one line per event.
 
-    def __init__(self, path: Path):
+    The detector container writes this, so collection needs no process on anyone's
+    laptop: it keeps running while the service does, and survives a power-off.
+    """
+
+    def __init__(self, path: Path, max_bytes: int = MAX_BYTES):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._rotate_if_large(max_bytes)
         self._handle = self.path.open("a", encoding="utf-8")
+
+    def _rotate_if_large(self, max_bytes: int) -> None:
+        """Move a full file aside so the log cannot grow without bound on the NAS."""
+        if not self.path.exists() or self.path.stat().st_size < max_bytes:
+            return
+        stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(self.path.stat().st_mtime))
+        self.path.rename(self.path.with_name(f"{self.path.stem}.{stamp}.jsonl"))
 
     def record(
         self,
@@ -109,6 +123,34 @@ class ZoneContactLog:
         row["box"] = list(row["box"])
         row["margin"] = round(row["margin"], 4)
         row["overlap"] = round(row["overlap"], 4)
+        self._write(row)
+
+    def record_event(self, telemetry: Sequence, start_time: float, duration_sec: float) -> None:
+        """Write one summary line for a completed event.
+
+        Per-frame lines are the raw record; this is the line to read when
+        deciding where the thresholds belong, without opening the whole file.
+        """
+        margins = [t.margin for t in telemetry if t.margin is not None]
+        if not margins:
+            return
+        overlaps = [t.overlap for t in telemetry if t.margin is not None]
+        self._write(
+            {
+                "event": True,
+                "t": round(start_time, 3),
+                "dur": round(duration_sec, 2),
+                "frames": len(telemetry),
+                "det_frames": len(margins),
+                "verdict_frames": sum(1 for t in telemetry if t.in_zone),
+                "margin_min": round(min(margins), 4),
+                "margin_med": round(float(np.median(margins)), 4),
+                "overlap_max": round(max(overlaps), 4),
+                "overlap_med": round(float(np.median(overlaps)), 4),
+            }
+        )
+
+    def _write(self, row: dict) -> None:
         self._handle.write(json.dumps(row) + "\n")
         self._handle.flush()
 

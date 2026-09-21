@@ -78,3 +78,41 @@ def test_log_writes_one_json_line_per_frame(tmp_path):
     assert rows[0]["in"] is True
     assert rows[0]["ids"] == [2]
     assert "margin" in rows[0] and "overlap" in rows[0]
+
+
+def test_event_summary_line_is_one_per_event(tmp_path):
+    """The summary is what gets read when picking thresholds; it must carry both metrics."""
+    from src.detector.zone_tracker import EventStatus, FrameTelemetry
+
+    log = ZoneContactLog(tmp_path / "zone_contact.jsonl")
+    telemetry = [
+        FrameTelemetry(EventStatus.ACTIVE, True, 0.5, (2,), (), 30, margin=0.24, overlap=0.0),
+        FrameTelemetry(EventStatus.ACTIVE, True, 1.0, (2,), (), 30, margin=-0.05, overlap=0.42),
+        FrameTelemetry(EventStatus.COOLDOWN, False, 1.5, (), (), 30, margin=None, overlap=0.0),
+    ]
+    log.record_event(telemetry, start_time=1758450938.0, duration_sec=3.4)
+    log.close()
+
+    rows = [json.loads(line) for line in (tmp_path / "zone_contact.jsonl").read_text().splitlines()]
+    assert len(rows) == 1
+    summary = rows[0]
+    assert summary["event"] is True
+    assert summary["det_frames"] == 2, "frames without a detection must not count"
+    assert summary["frames"] == 3
+    assert summary["verdict_frames"] == 2
+    assert summary["margin_min"] == -0.05
+    assert summary["margin_med"] == 0.095
+    assert summary["overlap_max"] == 0.42
+
+
+def test_event_without_detections_writes_nothing(tmp_path):
+    from src.detector.zone_tracker import EventStatus, FrameTelemetry
+
+    log = ZoneContactLog(tmp_path / "zone_contact.jsonl")
+    log.record_event(
+        [FrameTelemetry(EventStatus.IDLE, False, 0.0, (), (), 0, margin=None, overlap=0.0)],
+        start_time=1.0,
+        duration_sec=2.0,
+    )
+    log.close()
+    assert (tmp_path / "zone_contact.jsonl").read_text() == ""

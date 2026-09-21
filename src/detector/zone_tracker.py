@@ -211,6 +211,12 @@ class ZoneTracker:
                             detections=list(self._current_event_detections),
                             telemetry=list(self._current_event_telemetry),
                         )
+                        if self.contact_log is not None:
+                            self.contact_log.record_event(
+                                completed_event.telemetry,
+                                completed_event.start_time,
+                                duration,
+                            )
                     self.reset()
 
         return tracked_detections, dog_in_zone, completed_event
