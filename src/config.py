@@ -15,6 +15,9 @@ class CameraConfig(BaseModel):
     source: str = Field(default="rtsp://admin:password@192.168.0.100:554/stream2")
     fps: int = Field(default=15, ge=1, le=60)
     reconnect_interval_sec: float = Field(default=3.0, ge=0.5)
+    # Measured by src/cli/calibrate.py. 0 disables the correction entirely and
+    # leaves the pipeline byte-for-byte as it was before this option existed.
+    roll_deg: float = Field(default=0.0, ge=-45.0, le=45.0)
 
 
 class ZoneConfig(BaseModel):

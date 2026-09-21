@@ -9,6 +9,8 @@ import cv2
 from loguru import logger
 import numpy as np
 
+from src.utils.rotation import FrameRotator
+
 
 @dataclass
 class FramePacket:
@@ -49,13 +51,22 @@ class RingBuffer:
 class VideoStreamReader:
     """Robust video stream reader supporting RTSP reconnect and file loops."""
 
-    def __init__(self, source: str, target_fps: int = 15, reconnect_interval: float = 3.0):
+    def __init__(
+        self,
+        source: str,
+        target_fps: int = 15,
+        reconnect_interval: float = 3.0,
+        roll_deg: float = 0.0,
+    ):
         self.source = source
         self.target_fps = target_fps
         self.reconnect_interval = reconnect_interval
         self._is_running = False
         self._cap: Optional[cv2.VideoCapture] = None
         self._is_file = not source.startswith("rtsp://") and not source.startswith("http://")
+        # De-rolled here, at the one point every frame is created, so the motion
+        # gate, tracker, annotator, exporter and viewer all share one geometry.
+        self._rotator = FrameRotator(roll_deg)
 
     def _open_stream(self) -> bool:
         """Attempt to open video capture source."""
@@ -97,7 +108,9 @@ class VideoStreamReader:
                     continue
 
             frame_idx += 1
-            yield FramePacket(frame=frame, timestamp=time.time(), frame_idx=frame_idx)
+            yield FramePacket(
+                frame=self._rotator.apply(frame), timestamp=time.time(), frame_idx=frame_idx
+            )
 
             if self._is_file:
                 elapsed = time.monotonic() - start_time

@@ -1,19 +1,26 @@
 """Tk window for pad calibration: a red vertical reference, then a green pad.
 
-Tk rather than OpenCV's highgui, because OpenCV bundles a Qt build that ships no
-fonts and its menus, tooltips and save dialogs come out blank. Note this window
-must use ttk widgets: plain tk.Button aborts the process on this stack, while
-ttk.Button is fine.
+Tk rather than OpenCV's highgui, whose bundled Qt ships no fonts and renders its
+menus, tooltips and save dialogs blank. Two traps on this stack: PIL's ImageTk
+is broken so frames go to Tk as raw PPM, and plain tk.Button aborts the process
+while ttk.Button is fine.
 """
 
 import tkinter as tk
-from pathlib import Path
-from tkinter import ttk
 from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
+from tkinter import ttk
 
+from src.cli.frame_view import (
+    PREVIEW_PATH,
+    TEXT_COLOR,
+    draw_grid,
+    frame_to_photo,
+    grab_frame,
+    put_label,
+)
 from src.cli.quad_geometry import (
     CORNER_COUNT,
     VERTICAL_POINT_COUNT,
@@ -21,86 +28,34 @@ from src.cli.quad_geometry import (
     line_roll_deg,
     roll_from_quad,
 )
+from src.utils.rotation import FrameRotator
 
-GRID_STEP = 50
-GRID_COLOR = (0, 255, 255)
 VERTICAL_COLOR = (0, 0, 255)
 PAD_COLOR = (0, 200, 0)
-TEXT_COLOR = (255, 255, 255)
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
-PREVIEW_PATH = Path("snapshot_calibration.jpg")
-GRID_PATH = Path("snapshot_grid.jpg")
-
-
-def draw_grid(frame: np.ndarray, step: int = GRID_STEP) -> np.ndarray:
-    """Draw a coordinate grid on frame for visual calibration."""
-    grid_frame = frame.copy()
-    height, width = frame.shape[:2]
-
-    for x in range(0, width, step):
-        color = GRID_COLOR if x % 100 == 0 else (100, 100, 100)
-        cv2.line(grid_frame, (x, 0), (x, height), color, 1)
-        cv2.putText(grid_frame, str(x), (x + 2, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, GRID_COLOR, 1)
-
-    for y in range(0, height, step):
-        color = GRID_COLOR if y % 100 == 0 else (100, 100, 100)
-        cv2.line(grid_frame, (0, y), (width, y), color, 1)
-        cv2.putText(grid_frame, str(y), (5, y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, GRID_COLOR, 1)
-
-    return grid_frame
-
-
-def grab_frame(source: str) -> Optional[np.ndarray]:
-    """Read one frame from a stream/video, or load it when source is an image file."""
-    if Path(source).suffix.lower() in IMAGE_SUFFIXES:
-        return cv2.imread(source)
-
-    capture = cv2.VideoCapture(source)
-    if not capture.isOpened():
-        return None
-    ok, frame = capture.read()
-    capture.release()
-    return frame if ok else None
-
-
-def frame_to_photo(frame_bgr: np.ndarray, scale: float) -> tk.PhotoImage:
-    """Hand the frame to Tk as a raw PPM, since PIL's ImageTk is broken here."""
-    if scale != 1.0:
-        height, width = frame_bgr.shape[:2]
-        frame_bgr = cv2.resize(
-            frame_bgr, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA
-        )
-    rgb = np.ascontiguousarray(frame_bgr[:, :, ::-1])
-    header = f"P6\n{rgb.shape[1]} {rgb.shape[0]}\n255\n".encode("ascii")
-    return tk.PhotoImage(data=header + rgb.tobytes())
-
-
-def put_label(frame: np.ndarray, text: str, row: int, color=TEXT_COLOR) -> None:
-    """Draw one line of the on-image readout with a dark outline."""
-    origin = (10, 26 + row * 22)
-    cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
-
-
-def polygon_toml(points: List[Tuple[int, int]]) -> str:
-    """Format the corners as the polygon block used in config.toml."""
-    rows = ",\n".join(f"    [{x}, {y}]" for x, y in points)
-    return f"polygon = [\n{rows}\n]"
 
 
 class CalibrationApp:
     """Two-phase picker: a red vertical reference, then the green pad polygon."""
 
-    def __init__(self, root: tk.Tk, frame: np.ndarray, source: str, on_save=None):
+    def __init__(
+        self,
+        root: tk.Tk,
+        frame: np.ndarray,
+        source: str,
+        roll_deg: float = 0.0,
+        on_save=None,
+    ):
         self.root = root
-        self.frame = frame
         self.source = source
         self.on_save = on_save
+        self.roll_deg = float(roll_deg)
+        self._rotator = FrameRotator(self.roll_deg)
+        self.frame = self._rotator.apply(frame)
         self.vertical: List[Tuple[int, int]] = []
         self.polygon: List[Tuple[int, int]] = []
         self.cursor: Optional[Tuple[int, int]] = None
         self.show_grid = True
-        self.scale = self._fit_scale(root, frame)
+        self.scale = self._fit_scale(root, self.frame)
         self.photo: Optional[tk.PhotoImage] = None
         self._build_widgets()
         self.refresh()
@@ -185,7 +140,7 @@ class CalibrationApp:
     def recapture(self) -> None:
         frame = grab_frame(self.source)
         if frame is not None:
-            self.frame = frame
+            self.frame = self._rotator.apply(frame)
         self.refresh()
 
     # -- rendering ------------------------------------------------------
@@ -193,7 +148,7 @@ class CalibrationApp:
     def _draw_vertical(self, canvas: np.ndarray) -> None:
         if len(self.vertical) == VERTICAL_POINT_COUNT:
             start, end = self.vertical
-            # Extend past both clicks so the line is judgeable against the frame edge.
+            # Extend past both clicks so the line can be judged against the frame edge.
             dx, dy = end[0] - start[0], end[1] - start[1]
             norm = float(np.hypot(dx, dy)) or 1.0
             reach = int(np.hypot(*canvas.shape[:2]))
@@ -214,16 +169,23 @@ class CalibrationApp:
             cv2.putText(canvas, f"P{index + 1}", (point[0] + 7, point[1] - 7),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, PAD_COLOR, 2, cv2.LINE_AA)
 
+    def _roll_word(self) -> str:
+        """What the red line measures depends on whether the view is de-rolled."""
+        return "residual roll (should be 0)" if self._rotator.enabled else "camera roll"
+
     def _labels(self) -> List[Tuple[str, tuple]]:
+        line = self.roll_from_line()
+        line_text = f"{self._roll_word()}: {'-' if line is None else f'{line:+.1f} deg'}"
         if len(self.vertical) < VERTICAL_POINT_COUNT:
             rows = [("STEP 1 RED: click two points on a world-vertical edge", VERTICAL_COLOR),
                     ("(wall seam, door frame) - its tilt becomes the camera roll", TEXT_COLOR)]
         elif len(self.polygon) < CORNER_COUNT:
-            rows = [(f"roll from red line: {self.roll_from_line():+.1f} deg", VERTICAL_COLOR),
+            rows = [(line_text, VERTICAL_COLOR),
                     (f"STEP 2 GREEN: click pad corner {len(self.polygon) + 1} of {CORNER_COUNT}", PAD_COLOR)]
         else:
-            rows = [(f"roll from red line: {self.roll_from_line():+.1f} deg", VERTICAL_COLOR),
-                    (f"roll from green pad: {self.roll_from_pad():+.1f} deg", PAD_COLOR)]
+            pad = self.roll_from_pad()
+            rows = [(line_text, VERTICAL_COLOR),
+                    (f"roll from green pad: {'-' if pad is None else f'{pad:+.1f} deg'}", PAD_COLOR)]
         if is_bowtie(self.polygon):
             rows.append(("BOWTIE: corners cross over - press r and go around", VERTICAL_COLOR))
         if self.cursor is not None:
@@ -249,10 +211,16 @@ class CalibrationApp:
     def _status_text(self) -> str:
         line = self.roll_from_line()
         pad = self.roll_from_pad()
+        view = (
+            f"view de-rolled by {self.roll_deg:+.2f} deg - draw the polygon on this view"
+            if self._rotator.enabled
+            else "view not de-rolled (camera.roll_deg = 0)"
+        )
         return (f"red vertical points {len(self.vertical)}/{VERTICAL_POINT_COUNT}   |   "
                 f"green pad corners {len(self.polygon)}/{CORNER_COUNT}\n"
-                f"roll from red line: {'none' if line is None else f'{line:+.1f} deg'}      "
-                f"roll from green pad: {'need 4 corners' if pad is None else f'{pad:+.1f} deg'}")
+                f"{self._roll_word()}: {'none' if line is None else f'{line:+.2f} deg'}      "
+                f"roll from green pad: {'need 4 corners' if pad is None else f'{pad:+.2f} deg'}\n"
+                f"{view}")
 
     # -- results --------------------------------------------------------
 

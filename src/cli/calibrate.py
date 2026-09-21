@@ -15,16 +15,17 @@ import cv2
 import tkinter as tk
 from rich.console import Console
 
-from src.cli.calibration_app import (
+from src.cli.calibration_app import CalibrationApp
+from src.cli.frame_view import (
     GRID_PATH,
     PREVIEW_PATH,
-    CalibrationApp,
     draw_grid,
     grab_frame,
     polygon_toml,
 )
 from src.cli.quad_geometry import CORNER_COUNT, is_bowtie
 from src.config import load_config
+from src.utils.rotation import FrameRotator
 
 console = Console()
 
@@ -43,21 +44,21 @@ def report(points: List[Tuple[int, int]], roll: Optional[float]) -> None:
     console.print("\nThen apply it with [bold]./scripts/reload_config.sh[/bold]")
 
 
-def save_snapshot(source: str) -> None:
+def save_snapshot(source: str, roll_deg: float) -> None:
     """Write the grid overlay only, for coordinate reading without a display."""
     frame = grab_frame(source)
     if frame is None:
         console.print(f"[red]Could not read a frame from:[/red] {source}")
         return
-    cv2.imwrite(str(GRID_PATH), draw_grid(frame))
+    cv2.imwrite(str(GRID_PATH), draw_grid(FrameRotator(roll_deg).apply(frame)))
     console.print(f"[green]Saved grid snapshot:[/green] {GRID_PATH}")
 
 
-def open_window(frame, source: str) -> None:
+def open_window(frame, source: str, roll_deg: float) -> None:
     """Run the picker until the window closes."""
     root = tk.Tk()
     root.title(WINDOW_TITLE)
-    app = CalibrationApp(root, frame, source, on_save=report)
+    app = CalibrationApp(root, frame, source, roll_deg=roll_deg, on_save=report)
     root.mainloop()
     if len(app.polygon) != CORNER_COUNT:
         console.print("[yellow]Closed without saving a polygon.[/yellow]")
@@ -67,9 +68,10 @@ def calibrate(source: Optional[str], snapshot_only: bool) -> None:
     """Run the calibration utility."""
     config = load_config()
     source = source or config.camera.source
+    roll_deg = config.camera.roll_deg
 
     if snapshot_only:
-        save_snapshot(source)
+        save_snapshot(source, roll_deg)
         console.print("[yellow]Current polygon in config:[/yellow]", config.zone.polygon)
         return
 
@@ -79,8 +81,10 @@ def calibrate(source: Optional[str], snapshot_only: bool) -> None:
         console.print(f"[red]Could not read a frame from:[/red] {source}")
         return
 
+    if roll_deg:
+        console.print(f"[cyan]De-rolling the view by[/cyan] {roll_deg:+.2f} deg")
     console.print("[yellow]Current polygon in config:[/yellow]", config.zone.polygon)
-    open_window(frame, source)
+    open_window(frame, source, roll_deg)
 
 
 def main() -> None:

@@ -53,6 +53,7 @@ class SoonsimService:
             source=self.config.camera.source,
             target_fps=self.config.camera.fps,
             reconnect_interval=self.config.camera.reconnect_interval_sec,
+            roll_deg=self.config.camera.roll_deg,
         )
         pre_frames = self.config.recorder.pre_buffer_sec * self.config.camera.fps
         self.ring_buffer = RingBuffer(max_frames=pre_frames)
