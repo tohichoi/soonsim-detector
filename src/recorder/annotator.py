@@ -42,6 +42,10 @@ class HighContrastAnnotator:
             text_scale=0.5,
         )
         self.hud = TelemetryHud(min_stay_sec=min_stay_duration_sec, fps=fps)
+        # Zone entry is decided by these two points, so the diagnostic overlay
+        # marks them directly: yellow = CENTER, magenta = BOTTOM_CENTER.
+        self.center_color = (0, 255, 255)
+        self.bottom_center_color = (255, 0, 255)
 
     def annotate(
         self,
@@ -64,6 +68,9 @@ class HighContrastAnnotator:
 
             annotated = self.box_annotator.annotate(scene=annotated, detections=detections)
             annotated = self.label_annotator.annotate(scene=annotated, detections=detections, labels=labels)
+
+            if telemetry is not None:
+                self._draw_anchors(annotated, detections)
 
         # Draw timestamp header
         dt_str = datetime.datetime.fromtimestamp(timestamp, tz=KST).strftime("%Y-%m-%d %H:%M:%S")
@@ -95,3 +102,20 @@ class HighContrastAnnotator:
             self.hud.draw(annotated, telemetry)
 
         return annotated
+
+    def _draw_anchors(self, frame: np.ndarray, detections: sv.Detections) -> None:
+        """Mark the anchor points PolygonZone tests for the in-zone decision.
+
+        BOTTOM_CENTER sits on the axis-aligned box, not on the dog's feet, so
+        seeing it against the pad is how a rolled camera gets diagnosed.
+        """
+        centers = detections.get_anchors_coordinates(sv.Position.CENTER)
+        bottoms = detections.get_anchors_coordinates(sv.Position.BOTTOM_CENTER)
+        for (cx, cy), (bx, by) in zip(centers, bottoms):
+            for (px, py), color in (
+                ((cx, cy), self.center_color),
+                ((bx, by), self.bottom_center_color),
+            ):
+                point = (int(round(px)), int(round(py)))
+                cv2.circle(frame, point, 6, (0, 0, 0), -1)
+                cv2.circle(frame, point, 4, color, -1)
