@@ -8,6 +8,7 @@ subtitle = "3시간 만에 완성된 AI 기반 반려견 자동 감시 및 스�
 category = "Vision AI & IoT"
 status = "Completed"
 development_time = "3시간 11분 12초"
+development_origin = "atd"
 cost_reduction = "99.0% 절감"
 lead_director = "Mike (Managing Director)"
 thumbnail = "assets/detection_01_thumb.jpg"
