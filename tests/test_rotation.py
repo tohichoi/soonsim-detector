@@ -43,3 +43,23 @@ def test_rotator_disabled_returns_the_same_frame():
     rotator = FrameRotator(0.0)
     assert not rotator.enabled
     assert rotator.apply(frame) is frame
+
+
+def test_credentials_are_masked_but_the_rest_of_the_url_survives():
+    """A camera URL reaches the log on every reconnect; the password must not."""
+    from src.utils.masking import mask_url_credentials
+
+    masked = mask_url_credentials("rtsp://soonsim:secret@192.168.45.208/stream2")
+    assert masked == "rtsp://<credentials>@192.168.45.208/stream2"
+    assert "secret" not in masked
+
+    # A password containing '@' must be masked whole, not only up to the first one.
+    assert "ss@host" not in mask_url_credentials("rtsp://u:p@ss@host/s")
+    assert mask_url_credentials("rtsp://u:p@ss@host/s") == "rtsp://<credentials>@host/s"
+
+
+def test_masking_leaves_credential_free_sources_alone():
+    from src.utils.masking import mask_url_credentials
+
+    assert mask_url_credentials("./sample.mp4") == "./sample.mp4"
+    assert mask_url_credentials("rtsp://192.168.45.208/stream2") == "rtsp://192.168.45.208/stream2"

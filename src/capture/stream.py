@@ -9,6 +9,7 @@ import cv2
 from loguru import logger
 import numpy as np
 
+from src.utils.masking import mask_url_credentials
 from src.utils.rotation import FrameRotator
 
 
@@ -74,9 +75,9 @@ class VideoStreamReader:
             self._cap.release()
         self._cap = cv2.VideoCapture(self.source)
         if not self._cap.isOpened():
-            logger.warning(f"Failed to open video source: {self.source}")
+            logger.warning(f"Failed to open video source: {mask_url_credentials(self.source)}")
             return False
-        logger.info(f"Successfully opened video source: {self.source}")
+        logger.info(f"Successfully opened video source: {mask_url_credentials(self.source)}")
         return True
 
     def frames(self) -> Generator[FramePacket, None, None]:

@@ -25,6 +25,7 @@ from src.cli.frame_view import (
 )
 from src.cli.quad_geometry import CORNER_COUNT, is_bowtie
 from src.config import load_config
+from src.utils.masking import mask_url_credentials
 from src.utils.rotation import FrameRotator
 
 console = Console()
@@ -48,7 +49,7 @@ def save_snapshot(source: str, roll_deg: float) -> None:
     """Write the grid overlay only, for coordinate reading without a display."""
     frame = grab_frame(source)
     if frame is None:
-        console.print(f"[red]Could not read a frame from:[/red] {source}")
+        console.print(f"[red]Could not read a frame from:[/red] {mask_url_credentials(source)}")
         return
     cv2.imwrite(str(GRID_PATH), draw_grid(FrameRotator(roll_deg).apply(frame)))
     console.print(f"[green]Saved grid snapshot:[/green] {GRID_PATH}")
@@ -75,10 +76,10 @@ def calibrate(source: Optional[str], snapshot_only: bool) -> None:
         console.print("[yellow]Current polygon in config:[/yellow]", config.zone.polygon)
         return
 
-    console.print(f"[cyan]Capturing a frame from:[/cyan] {source}")
+    console.print(f"[cyan]Capturing a frame from:[/cyan] {mask_url_credentials(source)}")
     frame = grab_frame(source)
     if frame is None:
-        console.print(f"[red]Could not read a frame from:[/red] {source}")
+        console.print(f"[red]Could not read a frame from:[/red] {mask_url_credentials(source)}")
         return
 
     if roll_deg:

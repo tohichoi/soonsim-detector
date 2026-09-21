@@ -5,6 +5,7 @@ import cv2
 from loguru import logger
 import numpy as np
 from src.config import load_config
+from src.utils.masking import mask_url_credentials
 from ultralytics import YOLO
 import supervision as sv
 
@@ -17,7 +18,7 @@ def debug_camera(save_dir: str = "debug_output"):
 
     cap = cv2.VideoCapture(config.camera.source)
     if not cap.isOpened():
-        logger.error(f"Cannot open stream: {config.camera.source}")
+        logger.error(f"Cannot open stream: {mask_url_credentials(config.camera.source)}")
         return
 
     ret, frame = cap.read()
