@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 CORNER_COUNT = 4
+VERTICAL_POINT_COUNT = 2
 
 
 def _scalar_cross(origin: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
@@ -41,6 +42,23 @@ def _line_through(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Homogeneous line through two points."""
     (ax, ay), (bx, by) = a, b
     return np.array([ay - by, bx - ax, ax * by - ay * bx], dtype=float)
+
+
+def line_roll_deg(start: Tuple[int, int], end: Tuple[int, int]) -> float:
+    """Angle to feed cv2.getRotationMatrix2D to make a drawn line vertical.
+
+    Draw the line along something the world knows is vertical -- a wall seam, a
+    door frame -- and its tilt is the camera roll. Positive leans right at the
+    top and the returned angle is the counter-clockwise correction, which is
+    exactly the convention getRotationMatrix2D uses.
+    """
+    dx = float(end[0] - start[0])
+    dy = float(end[1] - start[1])
+    if dy > 0:  # orient the vector upward so the sign does not depend on click order
+        dx, dy = -dx, -dy
+    if dx == 0.0 and dy == 0.0:
+        return 0.0
+    return float(np.degrees(np.arctan2(dx, -dy)))
 
 
 def roll_from_quad(points: List[Tuple[int, int]]) -> Optional[float]:
