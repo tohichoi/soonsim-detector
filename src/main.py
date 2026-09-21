@@ -81,7 +81,11 @@ class SoonsimService:
             post_buffer_sec=self.config.recorder.post_buffer_sec,
             min_stay_duration_sec=self.config.recorder.min_stay_duration_sec,
         )
-        self.annotator = HighContrastAnnotator(zone=self.tracker.zone)
+        self.annotator = HighContrastAnnotator(
+            zone=self.tracker.zone,
+            min_stay_duration_sec=self.config.recorder.min_stay_duration_sec,
+            fps=self.config.camera.fps,
+        )
         self.exporter = VideoClipExporter(
             output_dir=self.config.recorder.output_dir,
             annotator=self.annotator,

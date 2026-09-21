@@ -15,6 +15,17 @@ class EventStatus(str, Enum):
     COMPLETED = "COMPLETED"
 
 
+@dataclass(frozen=True)
+class FrameTelemetry:
+    """Per-frame diagnostic state captured during an event."""
+    status: EventStatus
+    in_zone: bool
+    stay_sec: float
+    tracked_ids: Tuple[int, ...]
+    lost_remaining: Tuple[Tuple[int, int], ...]
+    lost_buffer_total: int
+
+
 @dataclass
 class CompletedEvent:
     start_time: float
@@ -22,6 +33,7 @@ class CompletedEvent:
     duration_sec: float
     frames: List[FramePacket]
     detections: List[sv.Detections]
+    telemetry: List[FrameTelemetry]
 
 
 class ZoneTracker:
@@ -45,9 +57,13 @@ class ZoneTracker:
         )
         self.tracker = sv.ByteTrack(
             track_activation_threshold=track_thresh,
+            # supervision scales lost_track_buffer against a 30fps reference
+            # (max_time_lost = frame_rate/30 * lost_track_buffer). Passing
+            # frame_rate=30 makes lost_track_buffer literal frames, so
+            # lost_track_buffer_sec maps 1:1 to seconds at our real fps.
             lost_track_buffer=max(1, int(round(lost_track_buffer_sec * fps))),
             minimum_matching_threshold=match_thresh,
-            frame_rate=fps,
+            frame_rate=30,
         )
         self.fps = fps
         self.post_buffer_frames = post_buffer_sec * fps
@@ -61,6 +77,65 @@ class ZoneTracker:
 
         self._current_event_frames: List[FramePacket] = []
         self._current_event_detections: List[sv.Detections] = []
+        self._current_event_telemetry: List[FrameTelemetry] = []
+
+    def _lost_track_remaining(self) -> List[Tuple[int, int]]:
+        """Read ByteTrack internals for lost tracks' remaining frames before drop."""
+        try:
+            bt = self.tracker
+            return [
+                (int(t.external_track_id), max(0, int(bt.max_time_lost - (bt.frame_id - t.frame_id))))
+                for t in bt.lost_tracks
+            ]
+        except Exception:
+            return []
+
+    def _lost_buffer_total(self) -> int:
+        """Return the tracker's effective lost-track buffer size (frames)."""
+        return int(getattr(self.tracker, "max_time_lost", 0))
+
+    def _build_telemetry(
+        self,
+        packet: FramePacket,
+        tracked_detections: sv.Detections,
+        dog_in_zone: bool,
+    ) -> FrameTelemetry:
+        stay_sec = (packet.timestamp - self.stay_start_time) if self.stay_start_time is not None else 0.0
+        tracker_ids = (
+            tuple(int(i) for i in tracked_detections.tracker_id)
+            if tracked_detections.tracker_id is not None
+            else ()
+        )
+        return FrameTelemetry(
+            status=self.status,
+            in_zone=dog_in_zone,
+            stay_sec=stay_sec,
+            tracked_ids=tracker_ids,
+            lost_remaining=tuple(self._lost_track_remaining()),
+            lost_buffer_total=self._lost_buffer_total(),
+        )
+
+    @staticmethod
+    def _empty_telemetry() -> FrameTelemetry:
+        return FrameTelemetry(
+            status=EventStatus.IDLE,
+            in_zone=False,
+            stay_sec=0.0,
+            tracked_ids=(),
+            lost_remaining=(),
+            lost_buffer_total=0,
+        )
+
+    def _record_frame(
+        self,
+        packet: FramePacket,
+        tracked_detections: sv.Detections,
+        dog_in_zone: bool,
+    ) -> None:
+        """Append frame, detections, and telemetry in lockstep."""
+        self._current_event_frames.append(packet)
+        self._current_event_detections.append(tracked_detections)
+        self._current_event_telemetry.append(self._build_telemetry(packet, tracked_detections, dog_in_zone))
 
     def update(
         self,
@@ -68,10 +143,7 @@ class ZoneTracker:
         detections: sv.Detections,
         pre_buffer_frames: List[FramePacket],
     ) -> Tuple[sv.Detections, bool, Optional[CompletedEvent]]:
-        """
-        Update tracker and zone.
-        Returns (tracked_detections, is_dog_in_zone, completed_event_or_None).
-        """
+        """Update tracker/zone; return (tracked_detections, in_zone, completed_event)."""
         tracked_detections = self.tracker.update_with_detections(detections)
         is_in_zone = self.zone.trigger(detections=tracked_detections)
         dog_in_zone = bool(np.any(is_in_zone)) if len(is_in_zone) > 0 else False
@@ -85,16 +157,15 @@ class ZoneTracker:
                 self.event_start_time = pre_buffer_frames[0].timestamp if pre_buffer_frames else packet.timestamp
                 self._current_event_frames = list(pre_buffer_frames) + [packet]
                 self._current_event_detections = [sv.Detections.empty()] * len(pre_buffer_frames) + [tracked_detections]
+                self._current_event_telemetry = [self._empty_telemetry()] * len(pre_buffer_frames) + [self._build_telemetry(packet, tracked_detections, dog_in_zone)]
         elif self.status == EventStatus.ACTIVE:
-            self._current_event_frames.append(packet)
-            self._current_event_detections.append(tracked_detections)
             if not dog_in_zone:
                 self.status = EventStatus.COOLDOWN
                 self.stay_end_time = packet.timestamp
                 self.cooldown_counter = 0
+            self._record_frame(packet, tracked_detections, dog_in_zone)
         elif self.status == EventStatus.COOLDOWN:
-            self._current_event_frames.append(packet)
-            self._current_event_detections.append(tracked_detections)
+            self._record_frame(packet, tracked_detections, dog_in_zone)
             if dog_in_zone:
                 self.status = EventStatus.ACTIVE
                 self.cooldown_counter = 0
@@ -109,6 +180,7 @@ class ZoneTracker:
                             duration_sec=duration,
                             frames=list(self._current_event_frames),
                             detections=list(self._current_event_detections),
+                            telemetry=list(self._current_event_telemetry),
                         )
                     self.reset()
 
@@ -123,3 +195,4 @@ class ZoneTracker:
         self.cooldown_counter = 0
         self._current_event_frames.clear()
         self._current_event_detections.clear()
+        self._current_event_telemetry.clear()

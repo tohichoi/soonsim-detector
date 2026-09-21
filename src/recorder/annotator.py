@@ -7,13 +7,21 @@ import cv2
 import numpy as np
 import supervision as sv
 
+from src.detector.zone_tracker import FrameTelemetry
+from src.recorder.hud import TelemetryHud
+
 KST = ZoneInfo("Asia/Seoul")
 
 
 class HighContrastAnnotator:
     """High contrast box, label, and zone visualizer."""
 
-    def __init__(self, zone: sv.PolygonZone):
+    def __init__(
+        self,
+        zone: sv.PolygonZone,
+        min_stay_duration_sec: float = 1.0,
+        fps: int = 15,
+    ):
         self.zone = zone
         self.box_annotator = sv.BoxAnnotator(
             thickness=3,
@@ -33,13 +41,15 @@ class HighContrastAnnotator:
             text_thickness=1,
             text_scale=0.5,
         )
+        self.hud = TelemetryHud(min_stay_sec=min_stay_duration_sec, fps=fps)
 
     def annotate(
         self,
         frame: np.ndarray,
         detections: Optional[sv.Detections],
         timestamp: float,
-        is_dog_in_zone: bool = False
+        is_dog_in_zone: bool = False,
+        telemetry: Optional[FrameTelemetry] = None,
     ) -> np.ndarray:
         """Annotate frame with polygon zone, boxes, and timestamp."""
         annotated = frame.copy()
@@ -80,5 +90,8 @@ class HighContrastAnnotator:
             1,
             cv2.LINE_AA,
         )
+
+        if telemetry is not None:
+            self.hud.draw(annotated, telemetry)
 
         return annotated

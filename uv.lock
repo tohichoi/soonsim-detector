@@ -1550,7 +1550,7 @@ requires-dist = [
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "python-telegram-bot", specifier = ">=22.8" },
     { name = "rich", specifier = ">=15.0.0" },
-    { name = "supervision", specifier = ">=0.30.4" },
+    { name = "supervision", specifier = ">=0.30.4,<0.31" },
     { name = "tzdata", specifier = ">=2026.4" },
     { name = "ultralytics", specifier = ">=8.4.155" },
     { name = "uvicorn", specifier = ">=0.53.0" },

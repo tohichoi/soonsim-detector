@@ -38,12 +38,14 @@ class VideoClipExporter:
             with sv.VideoSink(target_path=str(output_file), video_info=video_info) as sink:
                 for idx, packet in enumerate(event.frames):
                     dets = event.detections[idx] if idx < len(event.detections) else None
+                    telemetry = event.telemetry[idx] if idx < len(event.telemetry) else None
                     # Annotate frame
                     annotated_frame = self.annotator.annotate(
                         frame=packet.frame,
                         detections=dets,
                         timestamp=packet.timestamp,
-                        is_dog_in_zone=True,
+                        is_dog_in_zone=telemetry.in_zone if telemetry else False,
+                        telemetry=telemetry,
                     )
                     sink.write_frame(annotated_frame)
 
