@@ -1,7 +1,7 @@
 # Soonsim Detector 인수인계서 (HANDOFF)
 
 - 작성일: 2026-09-20
-- 최종 갱신: 2026-09-20 (커밋 `612dfd4` 기준)
+- 최종 갱신: 2026-09-21 (커밋 `c54e9c4` 기준)
 - 총괄: Mike (Managing Director)
 - 참여 에이전트:
   - Executive Staff: Atlas (전략 조율 및 파이프라인 총괄)
@@ -25,18 +25,21 @@ Synology NAS(DS923+)에 상시 가동 컨테이너로 배포되었으며, 외부
 7. **단일 RTSP 통합 파이프라인**: 감시 데몬과 웹 뷰어가 각각 RTSP를 열던 이중 연결 구조를 `ViewerStateStore` 기반 단일 파이프라인으로 통합. 카메라 연결 1회, 상태는 스레드 세이프 저장소로 공유.
 8. **넷플릭스식 시어터 모달 UI**: 실시간/이력 스냅샷 클릭 시 전체화면·시어터 모달 전환, 30분 이벤트 타임라인 썸네일 2배 확대(16:9 비율 유지), 신호등 방식 상태 인디케이터, 키보드 내비게이션(ESC / F / 방향키) 지원.
 9. **단위/통합 테스트 100% 통과**: 20개 테스트 케이스 전원 패스.
+10. **추적 진단 텔레메트리 HUD**: 내보내는 이벤트 영상 우측 상단에 `dog#`/`track`/`state`/`stay` 4행 HUD 를 XOR 텍스트 + 바 그래프로 표시. `track` 은 ByteTrack 내부 카운트다운(추적 유실까지 남은 프레임)을 직접 읽어 0에 가까울수록 빨강으로 시각화.
+11. **lost_track_buffer 설정화 및 시맨틱 교정**: 추적 유지 시간을 `detector.lost_track_buffer_sec`(초)로 설정화. supervision 의 `frame_rate/30` 정규화로 설정값이 실제 절반으로 동작하던 버그를 `frame_rate=30` 으로 교정해 1:1 대응.
 
 ---
 
 ## 2. 컴포넌트 아키텍처 및 모듈 맵
 
-- `src/config.py`: `tomllib` + `pydantic` 기반 설정 관리자 (카메라, 배변판, 텔레그램, 뷰어 `enabled`/`host`/`port`/`pin`/`retention_sec`).
+- `src/config.py`: `tomllib` + `pydantic` 기반 설정 관리자 (카메라, 배변판, 텔레그램, 뷰어 `enabled`/`host`/`port`/`pin`/`retention_sec`, `detector.lost_track_buffer_sec`).
 - `src/capture/stream.py`: `VideoStreamReader` (RTSP 자동 재연결/파일 루프) & `RingBuffer` (5초 슬라이딩 윈도우).
 - `src/detector/model.py`: `DogDetector` (YOLOv8n ONNX CPU 다중 동물 클래스 15/16 필터).
 - `src/detector/motion_gate.py`: `MotionGate` (프레임 차분 기반 2단계 모션 게이팅, 무동작 시 YOLO 추론 0회).
-- `src/detector/zone_tracker.py`: `ZoneTracker` (`sv.PolygonZone` 다중 앵커 + `sv.ByteTrack` 상태 머신 + 모션 게이팅).
+- `src/detector/zone_tracker.py`: `ZoneTracker` (`sv.PolygonZone` 다중 앵커 + `sv.ByteTrack` 상태 머신 + 모션 게이팅) + `FrameTelemetry`(프레임별 진단 상태 기록).
 - `src/recorder/annotator.py`: `HighContrastAnnotator` (3px 형광 라임/시안 고대비 박스/라벨/타임스탬프).
 - `src/recorder/exporter.py`: `VideoClipExporter` (`sv.VideoSink` 기반 전후 5초 MP4 합성).
+- `src/recorder/hud.py`: `TelemetryHud` (우측 상단 진단 HUD — dog#/track/state/stay 바 그래프, XOR 텍스트).
 - `src/notifier/telegram.py`: `TelegramNotifier` (`python-telegram-bot` 비동기 비디오 업로드 및 체류 시간 캡션).
 - `src/viewer/state.py`: `ViewerStateStore` — 감시 데몬 ↔ 뷰어 간 스레드 세이프 공유 상태 저장소. `LiveState`(실시간 텔레메트리) + `SnapshotRecord`(30분 보존 이벤트 큐, `retention_sec` 프루닝).
 - `src/viewer/server.py`: `ViewerServer` — 데몬과 동일 프로세스 내 데몬 스레드로 uvicorn 기동. 포트 점유 시 `find_available_port()`가 최대 100 포트까지 자동 대체.
@@ -85,9 +88,18 @@ uv run pytest
 ## 4. Git 형상 관리 상태
 
 - 원격 저장소: `git@github.com:tohichoi/soonsim-detector.git`
-- 기본 브랜치: `main`
-- 최신 커밋: `612dfd4` (`chore(deploy): move NGROK_AUTHTOKEN out of the tracked compose file`)
-- 작업 트리 상태: Clean (모든 소스 및 설정 동기화 완료)
+- 기본 브랜치: `main` (최신 `662304d`)
+- 미병합 기능 브랜치:
+  - `feat/lost-track-buffer-config` (`94083f4`): `lost_track_buffer_sec` 설정화 + `tzdata` 의존성 추가.
+  - `feat/telemetry-hud` (`c54e9c4`): 진단 텔레메트리 HUD + `frame_rate=30` 시맨틱 교정 + `is_dog_in_zone` 하드코딩 제거 + supervision `<0.31` 핀.
+- 작업 트리: `.agents` → `.claude` 마이그레이션 관련 미정리 변경·`.bak` 파일 다수 존재 (기능 커밋 범위 밖, 정리 필요)
+
+### 차기 세션 백로그 (감사 PASS, 비차단 항목)
+1. `zone_tracker.py` `_lost_track_remaining()` 의 `except Exception: return []` — 무로그 침묵 열화. 최초 1회 `logger.warning` 권장.
+2. `hud.py` `_track()` 의 lost 우선 분기 — 다중 트랙 시 개가 정상 추적 중이어도 "lost"로 오표기 가능.
+3. `hud.py` 간격 상수 `2` 미명명.
+4. 검증 게이트(`ruff`, `scripts/check-code-quality.sh`) 부재 — 프로젝트 차원 복구 필요.
+5. (범위 외 잠재 버그) `zone_tracker.py` `(self.stay_start_time or packet.timestamp)` — `stay_start_time == 0.0` 일 때 falsy 평가로 이벤트 폐기. `is not None` 비교 권장.
 
 ### 보안 항목 이력
 - **해결됨**: `docker-compose.yml`에 평문으로 커밋되어 있던 `NGROK_AUTHTOKEN`을 ngrok 대시보드에서 재발급(rotate)하고, `.env`(gitignore 대상) + `env_file` 방식으로 이전했습니다. 추적 파일에는 더 이상 토큰이 없습니다.
