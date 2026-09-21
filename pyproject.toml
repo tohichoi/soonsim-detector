@@ -14,7 +14,8 @@ dependencies = [
     "pytest-asyncio>=1.4.0",
     "python-telegram-bot>=22.8",
     "rich>=15.0.0",
-    "supervision>=0.30.4",
+    "supervision>=0.30.4,<0.31",
+    "tzdata>=2026.4",
     "ultralytics>=8.4.155",
     "uvicorn>=0.53.0",
 ]

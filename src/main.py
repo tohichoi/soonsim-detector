@@ -77,10 +77,15 @@ class SoonsimService:
             track_thresh=self.config.detector.track_thresh,
             match_thresh=self.config.detector.match_thresh,
             fps=self.config.camera.fps,
+            lost_track_buffer_sec=self.config.detector.lost_track_buffer_sec,
             post_buffer_sec=self.config.recorder.post_buffer_sec,
             min_stay_duration_sec=self.config.recorder.min_stay_duration_sec,
         )
-        self.annotator = HighContrastAnnotator(zone=self.tracker.zone)
+        self.annotator = HighContrastAnnotator(
+            zone=self.tracker.zone,
+            min_stay_duration_sec=self.config.recorder.min_stay_duration_sec,
+            fps=self.config.camera.fps,
+        )
         self.exporter = VideoClipExporter(
             output_dir=self.config.recorder.output_dir,
             annotator=self.annotator,
