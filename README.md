@@ -126,12 +126,21 @@ chat_id = "YOUR_TELEGRAM_CHAT_ID"
 
 ## 4. 도구 및 실행 가이드
 
-### 1) 배변판 영역 캘리브레이션
-카메라 스트림에서 50px 좌표 눈금이 그려진 `snapshot_grid.jpg`를 생성합니다:
+### 1) 카메라 회전 · 배변판 영역 캘리브레이션
+한 번의 실행으로 카메라 기울기와 배변판 폴리곤을 함께 뽑습니다:
 ```bash
 uv run python -m src.cli.calibrate
 ```
-생성된 이미지를 열어 배변판 4개 모서리 좌표를 확인 후 `config/config.toml`의 `polygon`에 반영합니다.
+1. **STEP 1 (빨간선)** — 벽 이음선이나 문틀처럼 세상 기준으로 수직인 곳에 두 점을 찍습니다. 그 기울기가 카메라 roll 입니다.
+2. **STEP 2 (초록)** — 배변판 네 모서리를 시계/반시계 방향으로 찍습니다.
+
+저장하면 `[zone] polygon` 과 `[camera] roll_deg` 에 붙여넣을 값이 출력됩니다. 반영은 `./scripts/reload_config.sh` (약 2초).
+
+- 화면은 이미 `roll_deg` 만큼 보정된 상태이므로 표시되는 각도는 **잔차**입니다 — 카메라가 그대로면 0 근처, 움직였으면 그만큼 벌어집니다. 도구가 절대값을 계산해 줍니다.
+- **배변판만 옮겼다면 STEP 1 을 건너뛰세요.** roll 은 그대로 두는 것이 맞습니다.
+- 폴리곤만 눈금으로 확인하려면: `uv run python -m src.cli.calibrate --snapshot` (`snapshot_grid.jpg` 생성)
+
+> 카메라 회전이 왜 문제이고 roll 을 어떻게 계산하는지는 **[docs/CALIBRATION-THEORY.md](docs/CALIBRATION-THEORY.md)** 를 보세요.
 
 ### 2) 실시간 디버그 웹 뷰어 (5분 큐 + 브라우저 강아지 소리 알림)
 ```bash
