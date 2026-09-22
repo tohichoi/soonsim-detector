@@ -242,4 +242,7 @@ class CalibrationApp:
             return
         cv2.imwrite(str(PREVIEW_PATH), self.composed())
         if self.on_save is not None:
-            self.on_save(list(self.polygon), self.roll_from_line())
+            # Both angles are residuals against the de-rolled view, from two
+            # independent features: a world-vertical line, and the pad rectangle's
+            # vanishing line. They estimate the same quantity and should agree.
+            self.on_save(list(self.polygon), self.roll_from_line(), self.roll_from_pad())

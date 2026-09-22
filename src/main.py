@@ -7,9 +7,8 @@ import signal
 import sys
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from zoneinfo import ZoneInfo
-import cv2
 from loguru import logger
 from rich.live import Live
 import supervision as sv
@@ -22,8 +21,10 @@ from src.detector.zone_contact import LOG_NAME, ZoneContactLog
 from src.detector.zone_tracker import CompletedEvent, EventStatus, ZoneTracker
 from src.notifier.telegram import TelegramNotifier
 from src.recorder.annotator import HighContrastAnnotator
-from src.recorder.exporter import VideoClipExporter
+from src.recorder.exporter import VideoClipExporter, prune_old_clips
+from src.recorder.signal_recorder import SignalRecorder
 from src.utils.telemetry import InferenceTelemetry
+from src.viewer.live_feed import LiveFeed
 from src.viewer.server import ViewerServer
 from src.viewer.state import ViewerStateStore
 
@@ -44,9 +45,6 @@ class SoonsimService:
         self.is_running = False
         self.alerts_count = 0
         self.last_alert_time = "None"
-        self._last_viewer_update_t = 0.0
-        self._last_baseline_t = 0.0
-        self._prev_animal_count = 0
 
     def _init_stream_and_detector(self) -> None:
         """Initialize stream reader, ring buffer, detector, and motion gate."""
@@ -97,99 +95,93 @@ class SoonsimService:
             annotator=self.annotator,
             fps=self.config.camera.fps,
         )
+        self.signal_recorder = (
+            SignalRecorder(
+                fps=self.config.camera.fps,
+                min_signal_sec=self.config.recorder.signal_min_sec,
+                pre_buffer_sec=self.config.recorder.pre_buffer_sec,
+                post_buffer_sec=self.config.recorder.post_buffer_sec,
+            )
+            if self.config.recorder.signal_clip_enabled
+            else None
+        )
         self.notifier = TelegramNotifier(config=self.config.telegram)
         self.dashboard = Dashboard()
         self.viewer_state = ViewerStateStore(retention_sec=self.config.viewer.retention_sec)
+        self.live_feed = LiveFeed(
+            state=self.viewer_state,
+            annotator=self.annotator,
+            motion_threshold=self.config.detector.motion_threshold,
+        )
         self.viewer_server = (
             ViewerServer(state_store=self.viewer_state, config=self.config)
             if self.config.viewer.enabled
             else None
         )
 
-    def _process_completed_event_async(self, event: CompletedEvent) -> None:
-        """Export video clip and send alert asynchronously."""
+    def _export_async(self, event: CompletedEvent, prefix: str, notify: bool) -> None:
+        """Export a clip in the background. Only a real event alerts anyone."""
         def worker():
             try:
-                path = self.exporter.export(event)
-                if path is not None:
-                    self.notifier.send_video(path, event.duration_sec, event.start_time)
-                    self.alerts_count += 1
-                    self.last_alert_time = datetime.datetime.fromtimestamp(
-                        event.start_time, tz=KST
-                    ).strftime("%Y-%m-%d %H:%M:%S")
+                path = self.exporter.export(event, prefix=prefix)
+                if path is None:
+                    return
+                self._prune_clips()
+                if not notify:
+                    return
+                self.notifier.send_video(path, event.duration_sec, event.start_time)
+                self.alerts_count += 1
+                self.last_alert_time = datetime.datetime.fromtimestamp(
+                    event.start_time, tz=KST
+                ).strftime("%Y-%m-%d %H:%M:%S")
             except Exception as e:
-                logger.error(f"Error processing completed event: {e}")
+                logger.error(f"Error exporting clip: {e}")
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _evaluate_detector(self, packet: FramePacket, is_active: bool) -> tuple[sv.Detections, float]:
-        """Perform motion gating and optional YOLO inference."""
+    def _prune_clips(self) -> None:
+        """Drop clips past the retention window; a full volume stops the service."""
+        removed = prune_old_clips(
+            self.exporter.output_dir, self.config.recorder.retention_days
+        )
+        if removed:
+            logger.info(
+                f"Pruned {removed} clip(s) older than "
+                f"{self.config.recorder.retention_days:.0f} days."
+            )
+
+    def _evaluate_detector(self, packet: FramePacket, is_active: bool) -> tuple[sv.Detections, float, bool]:
+        """Perform motion gating and YOLO inference; report unexplained motion.
+
+        The third value is True when the frame moved enough to trigger inference
+        yet no animal came back — the shape of a miss, and what arms the signal
+        recorder. Heartbeats score below the threshold by definition, so they
+        never read as signals.
+        """
         should_decimate = (packet.frame_idx % self.config.detector.inference_interval_frames == 0)
         if not (is_active or should_decimate):
             self.telemetry.record_skip(packet.frame_idx, "FRAME_DECIMATED", 0.0)
-            return self.cached_detections, 0.0
+            return self.cached_detections, 0.0, False
 
         should_infer, reason, diff_score = self.motion_gate.evaluate(packet.frame, is_active_event=is_active)
+        is_signal = False
         if should_infer:
             t0 = time.monotonic()
-            detections = self.detector.detect(packet.frame)
+            detections, top_score = self.detector.detect(packet.frame)
             latency_ms = (time.monotonic() - t0) * 1000.0
             self.cached_detections = detections
             summary = f"{len(detections)} box(es)" if len(detections) > 0 else "none"
-            self.telemetry.record_inference(packet.frame_idx, reason, latency_ms, len(detections), summary)
+            self.telemetry.record_inference(
+                packet.frame_idx, reason, latency_ms, len(detections), summary, top_score
+            )
+            is_signal = (
+                len(detections) == 0
+                and diff_score >= self.config.detector.motion_threshold
+            )
         else:
             detections = self.cached_detections
             self.telemetry.record_skip(packet.frame_idx, reason, diff_score)
-        return detections, diff_score
-
-    def _update_viewer(self, packet: FramePacket, dets: sv.Detections, in_zone: bool, diff: float) -> None:
-        """Synchronize frame and status to integrated ViewerStateStore."""
-        now = time.time()
-        is_motion = diff >= self.config.detector.motion_threshold
-        if in_zone:
-            title, desc, stype = "순심이 배변판 진입 확인!", "순심이가 배변판 영역 안에 위치하고 있습니다.", "dog_on_pad"
-        elif is_motion:
-            title, desc, stype = "움직임/조도 변화 감지됨", f"화면 내 움직임 감지 (변화 점수: {diff:.1f})", "motion"
-        else:
-            title, desc, stype = "현재 변화 없음 (정적 상태)", "실시간 감시 중이며 배변판에 유의미한 변화가 없습니다.", "no_change"
-
-        if not in_zone and (now - self._last_viewer_update_t) < 0.5:
-            return
-
-        self._last_viewer_update_t = now
-        annotated = self.annotator.annotate(
-            packet.frame,
-            dets,
-            timestamp=packet.timestamp,
-            is_dog_in_zone=in_zone,
-            telemetry=self.tracker.last_telemetry,
-        )
-        _, img_encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        img_bytes = img_encoded.tobytes()
-        labels = [f"class_{c}" for c in (dets.class_id if dets.class_id is not None else [])]
-
-        self.viewer_state.update_live(title, desc, stype, labels, in_zone, diff, img_bytes)
-        self._record_viewer_event_if_needed(now, in_zone, len(dets), is_motion, labels, diff, img_bytes)
-
-    def _record_viewer_event_if_needed(
-        self, now: float, in_zone: bool, count: int, is_motion: bool,
-        labels: list[str], diff: float, img_bytes: bytes
-    ) -> None:
-        """Record periodic or discrete events into viewer history."""
-        event_type: Optional[str] = None
-        if in_zone:
-            event_type = "DOG_ON_PAD"
-        elif count > 0 and count != self._prev_animal_count:
-            event_type = "ANIMAL_DETECTED"
-        elif is_motion:
-            event_type = "MOTION_CHANGE"
-        elif (now - self._last_baseline_t) >= 600.0:
-            event_type = "PERIODIC_BASELINE"
-            self._last_baseline_t = now
-
-        self._prev_animal_count = count
-        if event_type:
-            self.viewer_state.push_event(event_type, labels, in_zone, diff, img_bytes)
+        return detections, diff_score, is_signal
 
     def _step_pipeline(self, packet: FramePacket) -> tuple[bool, bool]:
         """Execute single frame pipeline step and return (is_active, in_zone)."""
@@ -198,14 +190,24 @@ class SoonsimService:
             self.ring_buffer.append(packet)
 
         is_active = (self.tracker.status == EventStatus.ACTIVE)
-        detections, diff = self._evaluate_detector(packet, is_active)
+        detections, diff, is_signal = self._evaluate_detector(packet, is_active)
         _, in_zone, completed = self.tracker.update(packet, detections, pre)
 
         if completed:
             self.ring_buffer.clear()
-            self._process_completed_event_async(completed)
+            self._export_async(completed, notify=True)
 
-        self._update_viewer(packet, detections, in_zone, diff)
+        if self.signal_recorder is not None:
+            unexplained = self.signal_recorder.observe(packet, detections, is_signal)
+            if unexplained is not None:
+                logger.warning(
+                    f"Unexplained motion ran {unexplained.duration_sec:.1f}s; keeping a clip."
+                )
+                self._export_async(unexplained, prefix="signal", notify=False)
+
+        self.live_feed.push(
+            packet, detections, in_zone, diff, telemetry=self.tracker.last_telemetry
+        )
         return is_active, in_zone
 
     def _update_dashboard(self, live: Live, packet: FramePacket, is_active: bool, in_zone: bool, fps: float) -> None:

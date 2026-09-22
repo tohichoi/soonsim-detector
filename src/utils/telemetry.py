@@ -56,11 +56,12 @@ class InferenceTelemetry:
         latency_ms: float,
         num_detected: int,
         detected_summary: str,
+        top_score: float = 0.0,
     ) -> None:
         """Record executed inference."""
         self.stats.total_frames += 1
         self.stats.inferences_run += 1
         self.stats.total_inference_time_ms += latency_ms
         logger.info(
-            f"[Frame #{frame_idx}] INFER | {reason} | Latency: {latency_ms:.1f}ms | Found: {num_detected} [{detected_summary}]"
+            f"[Frame #{frame_idx}] INFER | {reason} | Latency: {latency_ms:.1f}ms | Found: {num_detected} [{detected_summary}] | Top: {top_score:.2f}"
         )

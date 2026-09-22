@@ -1,7 +1,12 @@
-from typing import List, Union
+from typing import List, Tuple, Union
 import numpy as np
 import supervision as sv
 from ultralytics import YOLO
+
+# Boxes are collected down to this score and then judged in Python, so a frame
+# that finds nothing still reports how close it came. Without that number a
+# missed animal and an empty room look identical in the log.
+SCORE_FLOOR = 0.01
 
 
 class DogDetector:
@@ -23,12 +28,16 @@ class DogDetector:
         self.confidence_threshold = confidence_threshold
         self.class_ids = [class_ids] if isinstance(class_ids, int) else class_ids
 
-    def detect(self, frame: np.ndarray) -> sv.Detections:
-        """Run inference and return supervision Detections for target classes only."""
-        results = self.model(
-            frame,
-            conf=self.confidence_threshold,
-            classes=self.class_ids,
-            verbose=False,
-        )[0]
-        return sv.Detections.from_ultralytics(results)
+    def detect(self, frame: np.ndarray) -> Tuple[sv.Detections, float]:
+        """Run inference; return the kept detections and the best score seen.
+
+        The second value is the highest animal score on the frame whether or not
+        it cleared the threshold, so a near-miss (0.24) reads differently from a
+        frame the model saw nothing in (0.02).
+        """
+        results = self.model(frame, conf=SCORE_FLOOR, classes=self.class_ids, verbose=False)[0]
+        detections = sv.Detections.from_ultralytics(results)
+        if len(detections) == 0:
+            return detections, 0.0
+        keep = detections.confidence >= self.confidence_threshold
+        return detections[keep], float(detections.confidence.max())
