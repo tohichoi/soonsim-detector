@@ -55,7 +55,7 @@ contribution = "ngrok 영구 고정 도메인 보안 터널링 연동, PIN 잠�
 [[metrics]]
 label = "총 소요 시간"
 value = "3.18시간"
-subtext = "전통 외주 대비 99.3% 단축"
+subtext = "전통 외주 대비 99.7% 단축"
 
 [[metrics]]
 label = "개발 비용"
@@ -70,4 +70,4 @@ subtext = "디렉터 관리 공수 95% 절약"
 [[metrics]]
 label = "품질 검증"
 value = "100% PASS"
-subtext = "20개 단위·통합 테스트 전 항목 통과"
+subtext = "56개 단위·통합 테스트 전 항목 통과"
