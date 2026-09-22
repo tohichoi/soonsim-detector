@@ -1,7 +1,7 @@
 # Soonsim Detector 인수인계서 (HANDOFF)
 
 - 작성일: 2026-09-20
-- 최종 갱신: 2026-09-21 (커밋 `c54e9c4` 기준)
+- 최종 갱신: 2026-09-23 (커밋 `5ddc7f2` 기준)
 - 총괄: Mike (Managing Director)
 - 참여 에이전트:
   - Executive Staff: Atlas (전략 조율 및 파이프라인 총괄)
@@ -24,28 +24,34 @@ Synology NAS(DS923+)에 상시 가동 컨테이너로 배포되었으며, 외부
 6. **한국 표준시(KST) 타임존 동기화**: 도커 컨테이너(`tzdata`, `TZ=Asia/Seoul`) 및 백엔드 전반에 `ZoneInfo("Asia/Seoul")` 강제 적용으로 디버그 화면 및 영상 타임스탬프 일치.
 7. **단일 RTSP 통합 파이프라인**: 감시 데몬과 웹 뷰어가 각각 RTSP를 열던 이중 연결 구조를 `ViewerStateStore` 기반 단일 파이프라인으로 통합. 카메라 연결 1회, 상태는 스레드 세이프 저장소로 공유.
 8. **넷플릭스식 시어터 모달 UI**: 실시간/이력 스냅샷 클릭 시 전체화면·시어터 모달 전환, 30분 이벤트 타임라인 썸네일 2배 확대(16:9 비율 유지), 신호등 방식 상태 인디케이터, 키보드 내비게이션(ESC / F / 방향키) 지원.
-9. **단위/통합 테스트 100% 통과**: 20개 테스트 케이스 전원 패스.
+9. **단위/통합 테스트 100% 통과**: 56개 테스트 케이스 전원 패스.
 10. **추적 진단 텔레메트리 HUD**: 내보내는 이벤트 영상 우측 상단에 `dog#`/`track`/`state`/`stay` 4행 HUD 를 XOR 텍스트 + 바 그래프로 표시. `track` 은 ByteTrack 내부 카운트다운(추적 유실까지 남은 프레임)을 직접 읽어 0에 가까울수록 빨강으로 시각화.
 11. **lost_track_buffer 설정화 및 시맨틱 교정**: 추적 유지 시간을 `detector.lost_track_buffer_sec`(초)로 설정화. supervision 의 `frame_rate/30` 정규화로 설정값이 실제 절반으로 동작하던 버그를 `frame_rate=30` 으로 교정해 1:1 대응.
+12. **놓침 영상 자동 보존**: 2026-09-22 에 실제 배변 1건을 놓친 사건(07:47:02~07:47:58, 56초간 움직임은 감지됐고 추론 30회가 전부 0검출) 이후 도입. `SignalRecorder` 가 "움직임은 있는데 검출이 0인 구간"을 이벤트와 같은 전후 버퍼 창으로 `records/signal_<시각>.mp4` 에 저장한다. 텔레그램 알림은 보내지 않는다. 놓침은 이벤트가 아니라서 클립이 남지 않던 문제를 없앤다.
+13. **0검출 프레임의 최고 점수 기록**: `model.py` 가 `conf=0.01` 까지 상자를 모아 파이썬에서 자르고, 모든 INFER 로그에 `Top: 0.42` 를 남긴다. 놓침이 임계값 문제(0.24 근처)인지 조명·회전 문제(0.02 근처)인지 가르는 유일한 데이터.
+14. **클립 자동 정리**: `recorder.retention_days`(기본 30일)를 넘긴 클립을 삭제. `soonsim_*.mp4` 와 `signal_*.mp4` 만 대상이고 같은 폴더의 로그는 건드리지 않는다. 정리가 없으면 볼륨이 차서 감시 자체가 멈춘다.
+15. **캘리브레이션 잔차 보고**: 도구 화면이 이미 `roll_deg` 만큼 보정된 뒤라 표시되는 각도는 잔차다. `roll_verdict()` 가 절대값을 합성해 붙여넣을 값을 하나로 확정하고, 두 추정치(세계 수직선 / 배변판 소실선)가 허용치 2도를 넘게 벌어지면 갱신을 거부한다. 잘못된 각도로 덮어쓰면 이후 모든 프레임이 어긋나기 때문이다.
 
 ---
 
 ## 2. 컴포넌트 아키텍처 및 모듈 맵
 
-- `src/config.py`: `tomllib` + `pydantic` 기반 설정 관리자 (카메라, 배변판, 텔레그램, 뷰어 `enabled`/`host`/`port`/`pin`/`retention_sec`, `detector.lost_track_buffer_sec`).
+- `src/config.py`: `tomllib` + `pydantic` 기반 설정 관리자 (카메라, 배변판, 텔레그램, 뷰어 `enabled`/`host`/`port`/`pin`/`retention_sec`, `detector.lost_track_buffer_sec`, `recorder.signal_clip_enabled`/`signal_min_sec`/`retention_days`).
 - `src/capture/stream.py`: `VideoStreamReader` (RTSP 자동 재연결/파일 루프) & `RingBuffer` (5초 슬라이딩 윈도우).
 - `src/detector/model.py`: `DogDetector` (YOLOv8n ONNX CPU 다중 동물 클래스 15/16 필터).
 - `src/detector/motion_gate.py`: `MotionGate` (프레임 차분 기반 2단계 모션 게이팅, 무동작 시 YOLO 추론 0회).
 - `src/detector/zone_tracker.py`: `ZoneTracker` (`sv.PolygonZone` 다중 앵커 + `sv.ByteTrack` 상태 머신 + 모션 게이팅) + `FrameTelemetry`(프레임별 진단 상태 기록).
 - `src/recorder/annotator.py`: `HighContrastAnnotator` (3px 형광 라임/시안 고대비 박스/라벨/타임스탬프).
-- `src/recorder/exporter.py`: `VideoClipExporter` (`sv.VideoSink` 기반 전후 5초 MP4 합성).
+- `src/recorder/exporter.py`: `VideoClipExporter` (`sv.VideoSink` 기반 전후 5초 MP4 합성) + `prune_old_clips()` (retention 경과 클립 삭제 — `soonsim_*`/`signal_*` 만, 로그는 보존).
+- `src/recorder/signal_recorder.py`: `SignalRecorder` — 움직임은 있는데 검출이 0인 구간을 클립으로 남긴다. **시간을 반드시 벽시계(타임스탬프)로 재야 한다** — 추론이 5프레임마다·움직임 있을 때만 돌아 시그널 프레임이 초당 0.5회꼴이라, 프레임 수로 세면 56초짜리 놓침이 2초로 계산돼 버려진다. `MAX_SIGNAL_SEC = 45` 가 에피소드 상한이고 `recorder.signal_min_sec` 도 같은 값으로 잘린다(어긋나면 클립이 조용히 하나도 안 남아 테스트가 두 값을 묶어둔다).
 - `src/recorder/hud.py`: `TelemetryHud` (우측 상단 진단 HUD — dog#/track/state/stay 바 그래프, XOR 텍스트).
 - `src/notifier/telegram.py`: `TelegramNotifier` (`python-telegram-bot` 비동기 비디오 업로드 및 체류 시간 캡션).
 - `src/viewer/state.py`: `ViewerStateStore` — 감시 데몬 ↔ 뷰어 간 스레드 세이프 공유 상태 저장소. `LiveState`(실시간 텔레메트리) + `SnapshotRecord`(30분 보존 이벤트 큐, `retention_sec` 프루닝).
 - `src/viewer/server.py`: `ViewerServer` — 데몬과 동일 프로세스 내 데몬 스레드로 uvicorn 기동. 포트 점유 시 `find_available_port()`가 최대 100 포트까지 자동 대체.
 - `src/viewer/app.py`: FastAPI 라우팅 (PIN 인증, 실시간 스냅샷/이력 조회 API) — 상태 관리는 `state.py`, 마크업은 `templates.py`로 분리.
 - `src/viewer/templates.py`: 넷플릭스식 시어터 모달, 30분 이벤트 타임라인, 신호등 상태 인디케이터, 키보드 내비게이션을 포함한 뷰어 UI 템플릿.
-- `src/utils/telemetry.py`: 폴링 주기/추론 시간 등 런타임 텔레메트리 수집.
+- `src/viewer/live_feed.py`: `LiveFeed` — 뷰어에 무엇을 언제 밀지 결정. 검출에 대해 아무것도 판단하지 않아 `main.py` 에서 분리했다(파일 300줄 규칙). 강아지가 영역 밖일 때만 갱신을 0.5초로 제한한다.
+- `src/utils/telemetry.py`: 폴링 주기/추론 시간 등 런타임 텔레메트리 수집. INFER 로그에 `Found` 와 함께 `Top: <0검출 프레임 최고 점수>` 를 남긴다.
 - `src/cli/`: 운영 보조 도구 — `calibrate.py`(배변판 좌표 캘리브레이션), `debug_view.py`(단독 디버그 뷰어), `dashboard.py`.
 - `src/main.py`: 통합 상시 감시 데몬 엔트리포인트 (감시 루프 + 뷰어 서버 단일 프로세스).
 - `docker-compose.yml`: `soonsim-detector`(감시+뷰어 통합), `ngrok` 2중 서비스 구성. `./src` 읽기 전용 볼륨 마운트로 재빌드 없이 UI 즉시 반영.
@@ -88,18 +94,32 @@ uv run pytest
 ## 4. Git 형상 관리 상태
 
 - 원격 저장소: `git@github.com:tohichoi/soonsim-detector.git`
-- 기본 브랜치: `main` (최신 `662304d`)
-- 미병합 기능 브랜치:
-  - `feat/lost-track-buffer-config` (`94083f4`): `lost_track_buffer_sec` 설정화 + `tzdata` 의존성 추가.
-  - `feat/telemetry-hud` (`c54e9c4`): 진단 텔레메트리 HUD + `frame_rate=30` 시맨틱 교정 + `is_dog_in_zone` 하드코딩 제거 + supervision `<0.31` 핀.
-- 작업 트리: `.agents` → `.claude` 마이그레이션 관련 미정리 변경·`.bak` 파일 다수 존재 (기능 커밋 범위 밖, 정리 필요)
+- 기본 브랜치: `main` (최신 `5ddc7f2`) — `feat/missed-detection-capture`, `docs/calibration-theory` 병합 후 삭제됨
+- 남은 브랜치: `origin/feat/lost-track-buffer-config` (`94083f4`) 원격 전용. 내용(`lost_track_buffer_sec` 설정화, `tzdata` 의존성)은 이미 `main` 에 들어가 있으나 브랜치 tip 이 별도 — 실제 미병합 커밋이 있는지 확인 후 정리 필요.
+- 작업 트리: `.serena/` 와 `.claude/.headroom_wrap_*` 가 untracked 로 남아 있다. 프로젝트 코드가 아니라 도구 산출물이므로 `.gitignore` 등록 검토.
+
+### 최우선 — 배변판 접촉 임계값 미정 (2026-09-23 현재, 계측 1단계 정지)
+
+진입 판정은 여전히 `require_all_anchors=False`(`zone_tracker.py:61`)라 CENTER 하나만 들어와도 진입이다. 몸통 중점이 스치는 통과 동작도 오탐이 된다.
+
+Mike 라벨(2026-09-22 이벤트 14건): 진짜 배변 = `07:33:23`, `07:48:55`, `23:59:35`. `13:08:25` 는 "발만 살짝 올림", `19:20:21` 은 "배변판 위를 걸어감".
+
+- **확정 가능**: 오탐 11건 중 9건은 `overlap_max` 가 정확히 0.0000(배변판 접촉이 전혀 없음 = 앞을 지나가는 통과). `overlap >= 0.10` 게이트로 제거되고 진짜 3건은 무손실(진짜 최소 `overlap_max` = 0.2384). 임계값이 0.0 군집과 0.2384 사이 빈 구간에 놓인다.
+- **확정 불가**: 오탐 `13:08:25`(접촉 1.1초) / `19:20:21`(접촉 6.2초, 횡이동 164px) 이 진짜 `23:59:35`(접촉 6.6초, 횡이동 172px) 와 거의 동일한 서명이다. 위치·접촉·이동량·margin 어느 축으로도 안 갈린다. 진짜가 3건뿐이라 지금 체류 임계값을 정하면 곡선맞춤이다.
+
+**다음 단계:** 며칠 돌려 `records/signal_*.mp4` 를 모은 뒤, 그 시각의 `Top:` 값이 0.24 근처면 임계값 문제(내리면 됨), 0.02 근처면 조명·회전 문제다. 접촉 게이트는 그 뒤에 적용한다.
+
+### 재캘리브레이션 권장 (운영)
+
+현재 config 폴리곤으로 `roll_from_quad()` 를 돌리면 **−3.67°** 가 나온다. 적용된 보정은 24.86° 이므로 배변판 기준 잔차가 3.67° 이고, 이는 `ROLL_TOLERANCE_DEG = 2.0` 을 넘는다. 도구를 열면 "roll_deg = 21.19 로 갱신하세요"가 뜰 값이다. `snapshot_grid.jpg` 가 2026-09-21 03:37 촬영이라 그 뒤 카메라나 배변판이 움직였을 수 있다 — 단정하지 말고 도구로 재측정할 것.
 
 ### 차기 세션 백로그 (감사 PASS, 비차단 항목)
 1. `zone_tracker.py` `_lost_track_remaining()` 의 `except Exception: return []` — 무로그 침묵 열화. 최초 1회 `logger.warning` 권장.
 2. `hud.py` `_track()` 의 lost 우선 분기 — 다중 트랙 시 개가 정상 추적 중이어도 "lost"로 오표기 가능.
 3. `hud.py` 간격 상수 `2` 미명명.
-4. 검증 게이트(`ruff`, `scripts/check-code-quality.sh`) 부재 — 프로젝트 차원 복구 필요.
+4. 검증 게이트(`ruff`, `scripts/check-code-quality.sh`) 부재 — 프로젝트 차원 복구 필요. 변경 파일은 ruff clean 이나 기존 위반 3건(`src/viewer/app.py:11`, `src/viewer/server.py:5`, `tests/test_viewer_unified.py:5`, F401)이 남아 있다. `mypy` 미설치로 타입 검증은 미확인.
 5. (범위 외 잠재 버그) `zone_tracker.py` `(self.stay_start_time or packet.timestamp)` — `stay_start_time == 0.0` 일 때 falsy 평가로 이벤트 폐기. `is not None` 비교 권장.
+6. 포트폴리오 publisher 가 **삭제된 자산을 전파하지 않는다** — `portfolio-contribute.sh` 는 `scp -r`, `build_portfolio.py` `_copy_assets()` 는 파일별 `shutil.copy2` 라 병합만 한다. `roi_overlay.jpg` 를 지웠는데도 서버 `sources/`·`html/` 에 그대로 남아 URL 로 받아진다(페이지에서는 미참조). 허브 렌더 코드 변경이라 별도 커밋 + `bootstrap-publisher.sh` 필요.
 
 ### 보안 항목 이력
 - **해결됨**: `docker-compose.yml`에 평문으로 커밋되어 있던 `NGROK_AUTHTOKEN`을 ngrok 대시보드에서 재발급(rotate)하고, `.env`(gitignore 대상) + `env_file` 방식으로 이전했습니다. 추적 파일에는 더 이상 토큰이 없습니다.
