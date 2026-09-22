@@ -45,6 +45,17 @@ class RecorderConfig(BaseModel):
     post_buffer_sec: int = Field(default=5, ge=1, le=30)
     output_dir: Path = Field(default=Path("./records"))
     min_stay_duration_sec: float = Field(default=1.0, ge=0.1)
+    # Keep footage of motion the detector never turned into an animal, so a miss
+    # leaves something to review. A miss writes no event and therefore no clip.
+    signal_clip_enabled: bool = Field(default=True)
+    # The recorder closes an episode at signal_recorder.MAX_SIGNAL_SEC, so a
+    # minimum above that could never be reached and every clip would be dropped
+    # in silence. A test pins this ceiling to that constant.
+    signal_min_sec: float = Field(default=10.0, ge=1.0, le=45.0)
+    # Clips older than this are deleted; 0 keeps them forever. Only files this
+    # system named (soonsim_*, signal_*) are touched -- the logs beside them in
+    # records/ are not clips.
+    retention_days: float = Field(default=30.0, ge=0.0, le=3650.0)
 
 
 class TelegramConfig(BaseModel):
