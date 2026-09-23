@@ -195,7 +195,7 @@ class SoonsimService:
 
         if completed:
             self.ring_buffer.clear()
-            self._export_async(completed, notify=True)
+            self._export_async(completed, prefix="soonsim", notify=True)
 
         if self.signal_recorder is not None:
             unexplained = self.signal_recorder.observe(packet, detections, is_signal)
