@@ -24,7 +24,7 @@ Synology NAS(DS923+)에 상시 가동 컨테이너로 배포되었으며, 외부
 6. **한국 표준시(KST) 타임존 동기화**: 도커 컨테이너(`tzdata`, `TZ=Asia/Seoul`) 및 백엔드 전반에 `ZoneInfo("Asia/Seoul")` 강제 적용으로 디버그 화면 및 영상 타임스탬프 일치.
 7. **단일 RTSP 통합 파이프라인**: 감시 데몬과 웹 뷰어가 각각 RTSP를 열던 이중 연결 구조를 `ViewerStateStore` 기반 단일 파이프라인으로 통합. 카메라 연결 1회, 상태는 스레드 세이프 저장소로 공유.
 8. **넷플릭스식 시어터 모달 UI**: 실시간/이력 스냅샷 클릭 시 전체화면·시어터 모달 전환, 30분 이벤트 타임라인 썸네일 2배 확대(16:9 비율 유지), 신호등 방식 상태 인디케이터, 키보드 내비게이션(ESC / F / 방향키) 지원.
-9. **단위/통합 테스트 100% 통과**: 82개 테스트 케이스 전원 패스.
+9. **단위/통합 테스트 100% 통과**: 98개 테스트 케이스 전원 패스.
 10. **추적 진단 텔레메트리 HUD**: 내보내는 이벤트 영상 우측 상단에 `dog#`/`track`/`state`/`stay` 4행 HUD 를 XOR 텍스트 + 바 그래프로 표시. `track` 은 ByteTrack 내부 카운트다운(추적 유실까지 남은 프레임)을 직접 읽어 0에 가까울수록 빨강으로 시각화.
 11. **lost_track_buffer 설정화 및 시맨틱 교정**: 추적 유지 시간을 `detector.lost_track_buffer_sec`(초)로 설정화. supervision 의 `frame_rate/30` 정규화로 설정값이 실제 절반으로 동작하던 버그를 `frame_rate=30` 으로 교정해 1:1 대응.
 12. **놓침 영상 자동 보존**: 2026-09-22 에 실제 배변 1건을 놓친 사건(07:47:02~07:47:58, 56초간 움직임은 감지됐고 추론 30회가 전부 0검출) 이후 도입. `SignalRecorder` 가 "움직임은 있는데 검출이 0인 구간"을 이벤트와 같은 전후 버퍼 창으로 `records/signal_<시각>.mp4` 에 저장한다. 텔레그램 알림은 보내지 않는다. 놓침은 이벤트가 아니라서 클립이 남지 않던 문제를 없앤다.
@@ -37,6 +37,12 @@ Synology NAS(DS923+)에 상시 가동 컨테이너로 배포되었으며, 외부
     - 변환은 `_export_async` 워커에서 `export → prune → notify → transcode` 순으로 돈다. 알림이 ffmpeg 를 기다리지 않게 하려는 것이다. 알림 직후 프로세스가 죽으면 그 클립은 mp4v 로 남지만 원본은 훼손되지 않아 백필로 복구된다.
     - 기존 클립 약 97건은 `python -m src.cli.transcode_clips` 로 1회 변환한다. exporter 가 최종 파일명에 직접 쓰므로 `backfill` 은 60초 이내 수정 파일을 건너뛴다.
     - 뷰어에는 영상 재생 경로가 이번에 처음 생겼다. 그전까지는 스냅샷(JPEG) 전용이었고, `PROJECT-DESCRIPTION.md` 의 "녹화 영상 브라우징" 서술은 코드에 없는 상태였다.
+18. **클립 라벨링 워크플로**: 패널 기본 탭을 이벤트로 두고(오탐이 그쪽에 몰려 있다), 탭마다 그 영상이 무엇을 뜻하는지 설명 문구를 붙였다. "미분류만 보기" 체크박스와 서버 측 `label` 필터로 작업 대기열만 볼 수 있다.
+    - **좌표계 경계 (운영 지식)**: 카메라가 24.86° 기울어 설치돼 있었고 `e7e10c5`(2026-09-21 20:36)에서 추론 전 프레임 회전을 도입하면서 배변판 폴리곤 좌표계가 바뀌었다. **파일명 시각이 `20260921_203600` 미만인 클립은 회전되지 않은 프레임**이라 화면이 기울어져 있고 폴리곤도 달랐다. `zone_contact.jsonl` 의 `overlap`·`margin` 이 그 좌표계에서 계산된 값이므로 현재 수치와 같은 축에 놓을 수 없다 — 임계값 조정에는 쓸 수 없다.
+    - 그래서 새 라벨 `deferred` 를 만들었다. `unsure`("사람이 판단을 못 내림")와 성격이 다르다. 섞으면 튜닝 정답 데이터가 65행만큼 오염된다. 경계 이전 65건 중 62건에 적용했고, 3건(`20260921_202529/202545/202556`)은 Mike 가 이미 `unsure` 로 라벨해 두어 그대로 두었다.
+    - **Mike 라벨 결과 (2026-09-23)**: 43건 중 `false` 35 / `real` 5 / `unsure` 3. 오탐률 81% 로, handoff 가 09-22 데이터로 추정한 79% 와 일치한다. 놓침보다 오탐이 훨씬 큰 문제라는 것이 자체 라벨로 확인됐다.
+    - 패널은 표시 중인 클립을 **객체 참조가 아니라 이름과 정수 위치로** 추적한다(`openName`/`lastIndex`/`syncIndex`/`navTarget`). 목록을 다시 불러올 때 `clips` 가 새 객체 배열로 교체되므로 참조로 들고 있으면 페이저와 라벨 제거가 조용히 깨진다. 실제로 감사에서 그 결함이 나왔으니 되돌리지 말 것.
+    - Elena 감사 3회 모두 실제 결함이 나왔고 전부 패널의 상태 관리였다. 낡은 객체 참조 → 라벨 POST 비행 중 이동 시 오표시 → 연속 토글 시 로드 경합.
 
 ---
 
@@ -57,8 +63,9 @@ Synology NAS(DS923+)에 상시 가동 컨테이너로 배포되었으며, 외부
 - `src/viewer/app.py`: FastAPI 라우팅 (PIN 인증, 실시간 스냅샷/이력 조회 API, 클립 조회/라벨 API) — 상태 관리는 `state.py`, 마크업은 `templates.py`로 분리.
 - `src/viewer/templates.py`: 넷플릭스식 시어터 모달, 30분 이벤트 타임라인, 신호등 상태 인디케이터, 키보드 내비게이션을 포함한 뷰어 UI 템플릿.
 - `src/viewer/clips.py`: `list_clips`(종류별 최신순 목록) + `resolve_clip`(신뢰 경계 — 정규식·`is_relative_to` 로 `detection.log`·`zone_contact.jsonl`·`clip_labels.jsonl` 차단).
-- `src/viewer/clip_panel.py` / `clip_panel_js.py`: 클립 리뷰 패널 마크업·CSS 와 동작(IIFE). `templates.py` 에는 자리표시자 한 줄만 두고 splice 한다. `clip_panel_js.py` 가 299줄로 상한에 붙어 있어 추가 시 분리 필요.
-- `src/viewer/labels.py`: `clip_labels.jsonl` append-only 라벨 저장소. 이름당 마지막 값이 이기고, `{"label": null}` 로 지우면 미분류로 돌아간다.
+- `src/viewer/clip_panel.py` / `clip_panel_js.py` / `clip_panel_wiring.py`: 클립 리뷰 패널의 마크업·CSS, 목록·상태, 플레이어·라벨 배선. 셋으로 나눠 합쳐 하나의 IIFE 로 조립한다. `templates.py` 에는 자리표시자 한 줄만 두고 splice 한다.
+- `src/viewer/labels.py`: `clip_labels.jsonl` append-only 라벨 저장소. 이름당 마지막 값이 이기고, `{"label": null}` 로 지우면 미분류로 돌아간다. 값은 `real`/`false`/`unsure`/`deferred` 넷. `unlabelled` 는 조회 전용 필터 값이라 저장이 거부된다.
+- `GET /api/clips` 는 `kind`(all/signal/event)와 `label`(unlabelled 또는 라벨 4종)을 받는다. 둘은 교집합이다. `label` 을 생략하면 전체이고, **빈 문자열은 400** 이므로 전체를 원하면 파라미터 자체를 빼야 한다.
 - `src/recorder/transcode.py`: mp4v → H.264 변환(`to_h264`), `ffprobe` 코덱 판별(`is_h264`), 기존 클립 일괄 변환(`backfill`). `nice -n 19` + `-threads 1` 로 추론 CPU 를 건드리지 않는다. 교체 전 `_is_usable` 로 0바이트·비 H.264 를 걸러 원본을 보존하고, tmp 이름에 pid 를 넣어 프로세스 간 충돌을 막는다.
 - `src/cli/transcode_clips.py`: `python -m src.cli.transcode_clips` — 기존 클립 1회 일괄 변환.
 - `src/viewer/live_feed.py`: `LiveFeed` — 뷰어에 무엇을 언제 밀지 결정. 검출에 대해 아무것도 판단하지 않아 `main.py` 에서 분리했다(파일 300줄 규칙). 강아지가 영역 밖일 때만 갱신을 0.5초로 제한한다.
