@@ -20,10 +20,13 @@
   - 메모리 링 버퍼 기반 탐지 전 5초 + 체류 시간 + 탐지 후 5초 MP4 합성.
   - 고대비 바운딩 박스(두께 3px, 형광 라임/시안) 및 타임스탬프 오버레이.
   - 텔레그램 봇 API(`sendVideo`) 비동기 전송.
+  - 클립 H.264 후처리: `sv.VideoSink` 가 쓰는 mp4v 는 브라우저 `<video>` 에서 재생되지 않으므로, 내보낸 뒤 ffmpeg(libx264)로 변환한다. `nice -n 19` + `-threads 1` 로 추론 CPU 를 건드리지 않고, 알림과 클립 정리(prune) 뒤에 돌려 알림을 지연시키지 않는다. 기존 클립은 `python -m src.cli.transcode_clips` 로 1회 변환.
 - 관제 및 뷰어:
   - Rich 기반 실시간 상태 콘솔 대시보드 및 Loguru 로깅.
   - PIN 보안 잠금 화면 및 HttpOnly 세션 쿠키 인증.
-  - 5초 주기 스냅샷 캔버스 오버레이, 5분(60개) 롤링 큐, 녹화 영상 브라우징, Web Audio 강아지 소리 알림 FastAPI 웹 뷰어.
+  - 5초 주기 스냅샷 캔버스 오버레이, 5분(60개) 롤링 큐, Web Audio 강아지 소리 알림 FastAPI 웹 뷰어.
+  - 클립 리뷰 패널: 이벤트 클립(`soonsim_*`)과 놓침 후보 클립(`signal_*`)을 종류별로 나열하고 시어터 모달에서 재생한다. 진짜 배변 / 오탐 / 판단 보류 라벨을 남겨 `records/clip_labels.jsonl` 에 append-only 로 쌓는다. 이 라벨이 배변판 접촉 임계값 튜닝의 근거가 된다.
+  - 클립 경로는 신뢰 경계다. `records/` 에 로그와 계측 파일이 함께 있으므로 이름 정규식과 `is_relative_to` 로 클립 외 접근을 차단한다.
   - ngrok 영구 정적 도메인(`blend-replay-canary.ngrok-free.dev`) 기반 외부 HTTPS 관제.
 
 ## 3. Workflows & Architecture (핵심 워크플로우 및 체계)
@@ -53,3 +56,4 @@
 - [x] 마일스톤 6: 모션 게이팅 CPU 최적화(평상시 CPU 1% 미만) 및 배변판 ROI 전용 감시 고도화.
 - [x] 마일스톤 7: 웹 뷰어 PIN 보안 잠금 화면 및 세션 인증 체계 구축.
 - [x] 마일스톤 8: Synology NAS DS923+ 실서버 다중 컨테이너 배포 및 ngrok 영구 고정 도메인(`blend-replay-canary.ngrok-free.dev`) 외부 관제 연동 완료.
+- [x] 마일스톤 9: 클립 H.264 후처리 및 웹 뷰어 클립 리뷰·라벨링 패널 구축.

@@ -24,7 +24,7 @@ Synology NAS(DS923+)에 상시 가동 컨테이너로 배포되었으며, 외부
 6. **한국 표준시(KST) 타임존 동기화**: 도커 컨테이너(`tzdata`, `TZ=Asia/Seoul`) 및 백엔드 전반에 `ZoneInfo("Asia/Seoul")` 강제 적용으로 디버그 화면 및 영상 타임스탬프 일치.
 7. **단일 RTSP 통합 파이프라인**: 감시 데몬과 웹 뷰어가 각각 RTSP를 열던 이중 연결 구조를 `ViewerStateStore` 기반 단일 파이프라인으로 통합. 카메라 연결 1회, 상태는 스레드 세이프 저장소로 공유.
 8. **넷플릭스식 시어터 모달 UI**: 실시간/이력 스냅샷 클릭 시 전체화면·시어터 모달 전환, 30분 이벤트 타임라인 썸네일 2배 확대(16:9 비율 유지), 신호등 방식 상태 인디케이터, 키보드 내비게이션(ESC / F / 방향키) 지원.
-9. **단위/통합 테스트 100% 통과**: 56개 테스트 케이스 전원 패스.
+9. **단위/통합 테스트 100% 통과**: 82개 테스트 케이스 전원 패스.
 10. **추적 진단 텔레메트리 HUD**: 내보내는 이벤트 영상 우측 상단에 `dog#`/`track`/`state`/`stay` 4행 HUD 를 XOR 텍스트 + 바 그래프로 표시. `track` 은 ByteTrack 내부 카운트다운(추적 유실까지 남은 프레임)을 직접 읽어 0에 가까울수록 빨강으로 시각화.
 11. **lost_track_buffer 설정화 및 시맨틱 교정**: 추적 유지 시간을 `detector.lost_track_buffer_sec`(초)로 설정화. supervision 의 `frame_rate/30` 정규화로 설정값이 실제 절반으로 동작하던 버그를 `frame_rate=30` 으로 교정해 1:1 대응.
 12. **놓침 영상 자동 보존**: 2026-09-22 에 실제 배변 1건을 놓친 사건(07:47:02~07:47:58, 56초간 움직임은 감지됐고 추론 30회가 전부 0검출) 이후 도입. `SignalRecorder` 가 "움직임은 있는데 검출이 0인 구간"을 이벤트와 같은 전후 버퍼 창으로 `records/signal_<시각>.mp4` 에 저장한다. 텔레그램 알림은 보내지 않는다. 놓침은 이벤트가 아니라서 클립이 남지 않던 문제를 없앤다.
@@ -32,6 +32,11 @@ Synology NAS(DS923+)에 상시 가동 컨테이너로 배포되었으며, 외부
 14. **클립 자동 정리**: `recorder.retention_days`(기본 30일)를 넘긴 클립을 삭제. `soonsim_*.mp4` 와 `signal_*.mp4` 만 대상이고 같은 폴더의 로그는 건드리지 않는다. 정리가 없으면 볼륨이 차서 감시 자체가 멈춘다.
 15. **캘리브레이션 잔차 보고**: 도구 화면이 이미 `roll_deg` 만큼 보정된 뒤라 표시되는 각도는 잔차다. `roll_verdict()` 가 절대값을 합성해 붙여넣을 값을 하나로 확정하고, 두 추정치(세계 수직선 / 배변판 소실선)가 허용치 2도를 넘게 벌어지면 갱신을 거부한다. 잘못된 각도로 덮어쓰면 이후 모든 프레임이 어긋나기 때문이다.
 16. **이벤트 확정 시 데몬 즉사 수정**: `8a6a4d0` 에서 `_export_async` 에 필수 인자 `prefix` 가 생겼는데 이벤트 완료 호출부(`src/main.py:198`)만 옛 2인자 형태로 남아, 이벤트가 완료되는 바로 그 프레임에 `TypeError: missing 1 required positional argument: 'prefix'` 로 프로세스가 죽었다. 2026-09-23 01:01~17:25 KST 사이 23회 크래시, 그 구간 이벤트 알림 0건(마지막 정상 이벤트 클립은 `soonsim_20260922_235935.mp4`). signal 경로는 `prefix` 를 넘겨 정상이었기 때문에 진짜 이벤트만 사라졌다. `b0a7b2d` 에서 한 줄 수정하고, `_step_pipeline` 을 직접 구동해 클립이 notifier 까지 도달하는지 보는 회귀 테스트를 추가했다(수정을 되돌리면 프로덕션과 같은 `TypeError` 로 실패한다). 기존 파이프라인 테스트는 tracker/exporter 를 직접 호출해 이 배선을 건드리지 않아 못 잡았다.
+17. **클립 리뷰 패널 및 H.264 후처리**: 뷰어에 녹화 클립을 보고 라벨을 다는 패널을 추가했다. `signal_*` 와 `soonsim_*` 를 종류별로 나열하고, 시어터 모달에서 재생하며, 진짜 배변 / 오탐 / 판단 보류로 라벨을 남긴다. 라벨은 `records/clip_labels.jsonl` 에 append-only 로 쌓여 `zone_contact.jsonl` 과 함께 임계값 튜닝의 근거가 된다.
+    - 선결 문제가 하나 있었다. 클립이 `sv.VideoSink` 기본값인 mp4v(MPEG-4 Part 2)로 쓰여 브라우저 `<video>` 에서 재생되지 않는다. 컨테이너의 OpenCV 는 H.264 를 못 쓰지만(h264_v4l2m2m 장치 없음) ffmpeg 에 libx264 가 있어, 내보낸 뒤 변환한다.
+    - 변환은 `_export_async` 워커에서 `export → prune → notify → transcode` 순으로 돈다. 알림이 ffmpeg 를 기다리지 않게 하려는 것이다. 알림 직후 프로세스가 죽으면 그 클립은 mp4v 로 남지만 원본은 훼손되지 않아 백필로 복구된다.
+    - 기존 클립 약 97건은 `python -m src.cli.transcode_clips` 로 1회 변환한다. exporter 가 최종 파일명에 직접 쓰므로 `backfill` 은 60초 이내 수정 파일을 건너뛴다.
+    - 뷰어에는 영상 재생 경로가 이번에 처음 생겼다. 그전까지는 스냅샷(JPEG) 전용이었고, `PROJECT-DESCRIPTION.md` 의 "녹화 영상 브라우징" 서술은 코드에 없는 상태였다.
 
 ---
 
@@ -49,8 +54,13 @@ Synology NAS(DS923+)에 상시 가동 컨테이너로 배포되었으며, 외부
 - `src/notifier/telegram.py`: `TelegramNotifier` (`python-telegram-bot` 비동기 비디오 업로드 및 체류 시간 캡션).
 - `src/viewer/state.py`: `ViewerStateStore` — 감시 데몬 ↔ 뷰어 간 스레드 세이프 공유 상태 저장소. `LiveState`(실시간 텔레메트리) + `SnapshotRecord`(30분 보존 이벤트 큐, `retention_sec` 프루닝).
 - `src/viewer/server.py`: `ViewerServer` — 데몬과 동일 프로세스 내 데몬 스레드로 uvicorn 기동. 포트 점유 시 `find_available_port()`가 최대 100 포트까지 자동 대체.
-- `src/viewer/app.py`: FastAPI 라우팅 (PIN 인증, 실시간 스냅샷/이력 조회 API) — 상태 관리는 `state.py`, 마크업은 `templates.py`로 분리.
+- `src/viewer/app.py`: FastAPI 라우팅 (PIN 인증, 실시간 스냅샷/이력 조회 API, 클립 조회/라벨 API) — 상태 관리는 `state.py`, 마크업은 `templates.py`로 분리.
 - `src/viewer/templates.py`: 넷플릭스식 시어터 모달, 30분 이벤트 타임라인, 신호등 상태 인디케이터, 키보드 내비게이션을 포함한 뷰어 UI 템플릿.
+- `src/viewer/clips.py`: `list_clips`(종류별 최신순 목록) + `resolve_clip`(신뢰 경계 — 정규식·`is_relative_to` 로 `detection.log`·`zone_contact.jsonl`·`clip_labels.jsonl` 차단).
+- `src/viewer/clip_panel.py` / `clip_panel_js.py`: 클립 리뷰 패널 마크업·CSS 와 동작(IIFE). `templates.py` 에는 자리표시자 한 줄만 두고 splice 한다. `clip_panel_js.py` 가 299줄로 상한에 붙어 있어 추가 시 분리 필요.
+- `src/viewer/labels.py`: `clip_labels.jsonl` append-only 라벨 저장소. 이름당 마지막 값이 이기고, `{"label": null}` 로 지우면 미분류로 돌아간다.
+- `src/recorder/transcode.py`: mp4v → H.264 변환(`to_h264`), `ffprobe` 코덱 판별(`is_h264`), 기존 클립 일괄 변환(`backfill`). `nice -n 19` + `-threads 1` 로 추론 CPU 를 건드리지 않는다. 교체 전 `_is_usable` 로 0바이트·비 H.264 를 걸러 원본을 보존하고, tmp 이름에 pid 를 넣어 프로세스 간 충돌을 막는다.
+- `src/cli/transcode_clips.py`: `python -m src.cli.transcode_clips` — 기존 클립 1회 일괄 변환.
 - `src/viewer/live_feed.py`: `LiveFeed` — 뷰어에 무엇을 언제 밀지 결정. 검출에 대해 아무것도 판단하지 않아 `main.py` 에서 분리했다(파일 300줄 규칙). 강아지가 영역 밖일 때만 갱신을 0.5초로 제한한다.
 - `src/utils/telemetry.py`: 폴링 주기/추론 시간 등 런타임 텔레메트리 수집. INFER 로그에 `Found` 와 함께 `Top: <0검출 프레임 최고 점수>` 를 남긴다.
 - `src/cli/`: 운영 보조 도구 — `calibrate.py`(배변판 좌표 캘리브레이션), `debug_view.py`(단독 디버그 뷰어), `dashboard.py`.
@@ -131,9 +141,14 @@ Mike 라벨(2026-09-22 이벤트 14건): 진짜 배변 = `07:33:23`, `07:48:55`,
 1. `zone_tracker.py` `_lost_track_remaining()` 의 `except Exception: return []` — 무로그 침묵 열화. 최초 1회 `logger.warning` 권장.
 2. `hud.py` `_track()` 의 lost 우선 분기 — 다중 트랙 시 개가 정상 추적 중이어도 "lost"로 오표기 가능.
 3. `hud.py` 간격 상수 `2` 미명명.
-4. 검증 게이트(`ruff`, `scripts/check-code-quality.sh`) 부재 — 프로젝트 차원 복구 필요. 변경 파일은 ruff clean 이나 기존 위반 3건(`src/viewer/app.py:11`, `src/viewer/server.py:5`, `tests/test_viewer_unified.py:5`, F401)이 남아 있다. `mypy` 미설치로 타입 검증은 미확인.
+4. 검증 게이트(`ruff`, `scripts/check-code-quality.sh`) 부재 — 프로젝트 차원 복구 필요. 기존 F401 2건(`src/viewer/server.py:5`, `tests/test_viewer_unified.py:5`)과 `scripts/` 2건이 남아 있다. `src/viewer/app.py:11` 은 클립 패널 작업에서 해소됐다. `mypy` 미설치로 타입 검증은 미확인.
+4-1. 50줄 초과 함수 7건이 남아 있다 — `zone_tracker.py:154`(69), `test_zone_tracker.py:9`(64), `create_mock_video.py:8`(63), `benchmark_cpu.py:18`(62), `test_pipeline_integration.py:17`(58), `debug_view.py:13`(56), `annotator.py:50`(55). 전부 이번 클립 패널 작업 이전부터 있던 것이다.
 5. (범위 외 잠재 버그) `zone_tracker.py` `(self.stay_start_time or packet.timestamp)` — `stay_start_time == 0.0` 일 때 falsy 평가로 이벤트 폐기. `is not None` 비교 권장.
 6. 포트폴리오 publisher 가 **삭제된 자산을 전파하지 않는다** — `portfolio-contribute.sh` 는 `scp -r`, `build_portfolio.py` `_copy_assets()` 는 파일별 `shutil.copy2` 라 병합만 한다. `roi_overlay.jpg` 를 지웠는데도 서버 `sources/`·`html/` 에 그대로 남아 URL 로 받아진다(페이지에서는 미참조). 허브 렌더 코드 변경이라 별도 커밋 + `bootstrap-publisher.sh` 필요.
+7. `SIGKILL` 로 죽으면 `.{stem}.{pid}.transcode.tmp.mp4` 가 남는다. dotfile 이라 `glob("*.mp4")` 와 `prune_old_clips` 어느 쪽도 줍지 않는다. 이름에 pid 가 들어가면서 생긴 것으로, 이전 고정 이름은 다음 실행이 덮어썼다. `deploy.sh` 가 `docker rm -f` 를 쓰므로 배포 중 변환이 걸려 있으면 한 개 정도 남을 수 있다. `prune` 에 `.*.transcode.tmp.mp4` sweep 을 한 줄 넣으면 닫힌다.
+8. `_is_usable` 의 `is_h264(tmp)` 는 `nice` 없이 도는 ffprobe 다(수십 ms). 130ms 추론 예산 대비 무시할 수준이나, 이 파일의 원칙이 "변환이 추론을 방해하지 않는다" 이므로 통일하려면 함께 nice 를 걸면 된다.
+9. 클립 패널의 `<style>` 블록이 `templates.py` splice 위치 때문에 body 안에 들어간다. 브라우저 렌더는 정상이고, 고치려면 `HTML_TEMPLATE` 구조를 손대야 해서 비용 대비 이득이 적다고 판단해 보류했다.
+10. 클립 패널 후속 후보(감사·구현 중 도출, 미구현): ① 클립 응답에 최고 점수·검출 객체·체류 시간이 없어 "왜 이 클립이 저장됐는지"를 목록에서 못 보여준다 — 라벨 품질에 가장 크게 영향을 줄 항목. ② `label=null` 서버 측 필터 부재 — signal 이 하루 28건꼴이라 곧 필요해진다. ③ 썸네일/`poster` 부재 — 스냅샷 갤러리와 시각적 무게감이 다르다.
 
 ### 보안 항목 이력
 - **해결됨**: `docker-compose.yml`에 평문으로 커밋되어 있던 `NGROK_AUTHTOKEN`을 ngrok 대시보드에서 재발급(rotate)하고, `.env`(gitignore 대상) + `env_file` 방식으로 이전했습니다. 추적 파일에는 더 이상 토큰이 없습니다.
