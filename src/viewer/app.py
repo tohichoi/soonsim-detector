@@ -231,12 +231,12 @@ def _register_clip_routes(app: FastAPI, cfg: AppConfig, sessions: SessionStore) 
     output_dir = Path(cfg.recorder.output_dir)
 
     @app.get("/api/clips")
-    async def get_clips(request: Request, kind: str = "all"):
+    async def get_clips(request: Request, kind: str = "all", label: Optional[str] = None):
         require_auth(request)
         try:
-            clips = list_clips(output_dir, kind=kind)
+            clips = list_clips(output_dir, kind=kind, label=label)
         except ValueError:
-            raise HTTPException(status_code=400, detail="알 수 없는 클립 종류입니다.")
+            raise HTTPException(status_code=400, detail="지원하지 않는 필터 값입니다.")
         return {"clips": clips}
 
     @app.get("/api/clips/{name}")

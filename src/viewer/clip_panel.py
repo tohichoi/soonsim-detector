@@ -3,19 +3,27 @@
 Spliced into ``HTML_TEMPLATE`` at the ``<!-- CLIP_PANEL -->`` placeholder. The
 panel lists recorded clips (signal / event), plays the chosen one in a modal
 that reuses the viewer's existing theater classes, and lets the operator label
-it as a real defecation, a false alarm, or unsure. Those labels are the
-training signal for tuning the detector, so the labelling flow is the point.
+it as a real defecation, a false alarm, unsure, or deferred (a clip recorded
+before the 2026-09-21 camera-roll fix, which is out of scope for tuning). Those
+labels are the training signal for tuning the detector, so the labelling flow
+is the point.
 
-Markup and CSS live here; the behaviour is ``clip_panel_js.py``, kept apart so
-each file stays under the 300-line cap.
+Markup and CSS live here. The behaviour is split across ``clip_panel_js.py``
+(list state and rendering) and ``clip_panel_wiring.py`` (player, labelling and
+event wiring); they are concatenated into one IIFE below, so the halves share a
+scope and no interface has to be exported. The split is only about the 300-line
+cap.
 
 Backend contract (served by the viewer app):
-    GET  /api/clips?kind=all|signal|event -> {"clips": [...]} newest first
+    GET  /api/clips?kind=all|signal|event
+         [&label=unlabelled|real|false|unsure|deferred]
+                                          -> {"clips": [...]} newest first
     GET  /api/clips/{name}                -> the mp4
     POST /api/clips/{name}/label          -> {"name": str, "label": str|null}
 """
 
-from src.viewer.clip_panel_js import CLIP_PANEL_JS
+from src.viewer.clip_panel_js import CLIP_PANEL_JS_CORE
+from src.viewer.clip_panel_wiring import CLIP_PANEL_JS_PLAYER
 
 _PANEL_TEMPLATE = """
 <style>
@@ -114,6 +122,13 @@ _PANEL_TEMPLATE = """
     .clip-label-real { background: var(--success); color: #000; }
     .clip-label-false { background: var(--alert); color: #fff; }
     .clip-label-unsure { background: var(--warning); color: #000; }
+    /* Dim, dashed and slate so it reads as "set aside", not the amber warning
+       used by 판단 보류. Reuses the palette's border/slate tokens. */
+    .clip-label-deferred {
+        background: #334155;
+        color: #94a3b8;
+        border: 1px dashed #64748b;
+    }
     .clip-label-none { background: #64748b; color: #fff; }
     .clip-state {
         padding: 24px 12px;
@@ -142,7 +157,7 @@ _PANEL_TEMPLATE = """
         color: #ffffff;
     }
     .label-btn:disabled { opacity: 0.5; cursor: default; }
-    /* The shared .theater-footer-controls does not wrap, so on a phone the six
+    /* The shared .theater-footer-controls does not wrap, so on a phone the seven
        clip buttons run past the right edge and the last one is unreachable.
        Scoped to #clipModal so the live theater modal keeps its own layout. */
     #clipModal .theater-footer-controls {
@@ -175,6 +190,36 @@ _PANEL_TEMPLATE = """
     }
     .clip-toast.show { opacity: 1; }
     .clip-toast.error { border-color: var(--alert); color: #fca5a5; }
+    /* What the selected tab's recordings are. role="status" on the element
+       announces it politely when the tab changes. */
+    .clip-desc {
+        font-size: 0.85rem;
+        line-height: 1.6;
+        color: #cbd5e1;
+        background: rgba(56, 189, 248, 0.08);
+        border-left: 3px solid var(--accent);
+        border-radius: 0 8px 8px 0;
+        padding: 8px 12px;
+        margin-bottom: 12px;
+    }
+    .clip-filter {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 44px;
+        padding: 0 4px;
+        font-size: 0.85rem;
+        color: #cbd5e1;
+        cursor: pointer;
+    }
+    .clip-filter input {
+        width: 18px;
+        height: 18px;
+        accent-color: var(--accent);
+        cursor: pointer;
+    }
+    .clip-filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
 
 <section class="card clip-panel" aria-labelledby="clipPanelTitle">
@@ -185,15 +230,20 @@ _PANEL_TEMPLATE = """
             <button type="button" class="clip-tab" id="clipRefreshBtn">새로고침</button>
         </div>
     </div>
+    <p class="clip-desc" id="clipTabDesc" role="status">탐지기가 순심이가 배변판에 있다고 판단해 저장한 영상입니다. 텔레그램 알림이 발송됩니다. 진짜 배변이 아닌 것을 찾아 오탐으로 표시하면, 배변판 진입·체류 임계값을 조정하는 근거가 됩니다.</p>
+    <div class="clip-tabs" role="group" aria-label="클립 필터">
+        <button type="button" class="clip-tab" data-kind="signal" aria-pressed="false">신호</button>
+        <button type="button" class="clip-tab" data-kind="event" aria-pressed="true">이벤트</button>
+        <button type="button" class="clip-tab" data-kind="all" aria-pressed="false">전체</button>
+        <label class="clip-filter">
+            <input type="checkbox" id="clipUnlabelledOnly">
+            <span>미분류만 보기</span>
+        </label>
+    </div>
     <p class="clip-hint">
         저장된 영상을 확인하고 진짜 배변 / 오탐 / 판단 보류로 분류해 주세요.
         이 라벨이 탐지기 튜닝의 학습 신호가 됩니다.
     </p>
-    <div class="clip-tabs" role="group" aria-label="클립 종류 필터">
-        <button type="button" class="clip-tab" data-kind="signal" aria-pressed="true">신호</button>
-        <button type="button" class="clip-tab" data-kind="event" aria-pressed="false">이벤트</button>
-        <button type="button" class="clip-tab" data-kind="all" aria-pressed="false">전체</button>
-    </div>
     <ul class="clip-list" id="clipList" aria-busy="true" aria-live="polite">
         <li class="clip-state">클립을 불러오는 중...</li>
     </ul>
@@ -228,6 +278,7 @@ _PANEL_TEMPLATE = """
             <button type="button" class="theater-btn label-btn" data-label="real" aria-pressed="false">진짜 배변</button>
             <button type="button" class="theater-btn label-btn" data-label="false" aria-pressed="false">오탐</button>
             <button type="button" class="theater-btn label-btn" data-label="unsure" aria-pressed="false">판단 보류</button>
+            <button type="button" class="theater-btn label-btn" data-label="deferred" aria-pressed="false">보류 · 구 좌표계</button>
             <button type="button" class="theater-btn" id="clipClearBtn">라벨 지우기</button>
         </div>
     </div>
@@ -239,5 +290,8 @@ _PANEL_TEMPLATE = """
 /*__CLIP_PANEL_JS__*/
 </script>
 """
+
+# The two behaviour halves share one IIFE scope, so they are joined here.
+CLIP_PANEL_JS = "(function () {\n" + CLIP_PANEL_JS_CORE + CLIP_PANEL_JS_PLAYER + "})();\n"
 
 CLIP_PANEL_HTML = _PANEL_TEMPLATE.replace("/*__CLIP_PANEL_JS__*/", CLIP_PANEL_JS)

@@ -95,6 +95,74 @@ def test_labels_round_trip_with_last_write_winning(tmp_path):
     assert list_clips(tmp_path, kind="event")[0]["label"] is None
 
 
+def _names(clips: list[dict]) -> list[str]:
+    return [c["name"] for c in clips]
+
+
+@pytest.mark.parametrize("verdict", ["real", "false", "unsure", "deferred"])
+def test_every_allowed_label_round_trips(tmp_path, verdict):
+    _touch(tmp_path, CLIP)
+    set_label(tmp_path, CLIP, verdict)
+    assert load_labels(tmp_path) == {CLIP: verdict}
+    assert list_clips(tmp_path)[0]["label"] == verdict
+    assert _names(list_clips(tmp_path, label=verdict)) == [CLIP]
+
+
+def test_deferred_is_distinct_from_unsure(tmp_path):
+    """A clip set aside as unusable must not read as "could not decide".
+
+    The stale clips predate the roll calibration, so their polygon does not
+    match the current one; counting them as unsure verdicts would poison the
+    threshold tuning. Both stay filterable and visible separately.
+    """
+    oldest = "soonsim_20260101_000000.mp4"
+    _touch(tmp_path, oldest)
+    _touch(tmp_path, CLIP)
+    _touch(tmp_path, SIGNAL)
+    set_label(tmp_path, CLIP, "deferred")
+    set_label(tmp_path, SIGNAL, "unsure")
+
+    assert load_labels(tmp_path) == {CLIP: "deferred", SIGNAL: "unsure"}
+    assert _names(list_clips(tmp_path, label="deferred")) == [CLIP]
+    assert _names(list_clips(tmp_path, label="unsure")) == [SIGNAL]
+    # A deferred clip carries a label, so it must leave the work queue.
+    assert _names(list_clips(tmp_path, label="unlabelled")) == [oldest]
+    assert _names(list_clips(tmp_path, kind="event", label="deferred")) == [CLIP]
+    assert _names(list_clips(tmp_path, kind="signal", label="deferred")) == []
+
+
+def test_list_clips_filters_by_label(tmp_path):
+    oldest = "soonsim_20260101_000000.mp4"
+    _touch(tmp_path, oldest)
+    _touch(tmp_path, CLIP)
+    _touch(tmp_path, SIGNAL)
+    set_label(tmp_path, CLIP, "real")
+    set_label(tmp_path, SIGNAL, "false")
+
+    assert _names(list_clips(tmp_path)) == [SIGNAL, CLIP, oldest]
+    assert _names(list_clips(tmp_path, label="unlabelled")) == [oldest]
+    assert _names(list_clips(tmp_path, label="real")) == [CLIP]
+    assert _names(list_clips(tmp_path, label="false")) == [SIGNAL]
+    assert _names(list_clips(tmp_path, label="unsure")) == []
+
+
+def test_list_clips_combines_kind_and_label(tmp_path):
+    _touch(tmp_path, CLIP)
+    _touch(tmp_path, SIGNAL)
+    set_label(tmp_path, CLIP, "real")
+
+    assert _names(list_clips(tmp_path, kind="signal", label="unlabelled")) == [SIGNAL]
+    assert _names(list_clips(tmp_path, kind="signal", label="real")) == []
+    assert _names(list_clips(tmp_path, kind="event", label="real")) == [CLIP]
+    assert _names(list_clips(tmp_path, kind="event", label="unlabelled")) == []
+
+
+def test_list_clips_rejects_an_unknown_label(tmp_path):
+    for bad in ("maybe", "all", "unlabeled", "Real", ""):
+        with pytest.raises(ValueError):
+            list_clips(tmp_path, label=bad)
+
+
 def test_list_clips_survives_a_corrupt_label_line(tmp_path):
     _touch(tmp_path, CLIP)
     set_label(tmp_path, CLIP, "real")
@@ -143,6 +211,47 @@ def test_clip_routes_serve_list_playback_and_label(clip_client):
 
     assert client.post(f"/api/clips/{CLIP}/label", json={"label": "maybe"}).status_code == 400
     assert client.post(f"/api/clips/{CLIP}/label", json={"label": None}).json()["label"] is None
+
+
+def test_clip_route_filters_by_label(clip_client):
+    client, directory = clip_client
+    unlabelled = "soonsim_20260101_000000.mp4"
+    _touch(directory, unlabelled)
+    _touch(directory, CLIP)
+    set_label(directory, CLIP, "real")
+
+    def names(query: str) -> list[str]:
+        body = client.get(f"/api/clips?{query}").json()
+        return [c["name"] for c in body["clips"]]
+
+    assert names("") == [CLIP, unlabelled]
+    assert names("label=unlabelled") == [unlabelled]
+    assert names("label=real") == [CLIP]
+    assert names("kind=event&label=unlabelled") == [unlabelled]
+    assert names("kind=signal&label=unlabelled") == []
+
+    assert client.get("/api/clips?label=maybe").status_code == 400
+    assert client.get("/api/clips?label=all").status_code == 400
+
+
+def test_clip_route_accepts_and_filters_the_deferred_label(clip_client):
+    """The bulk relabelling of the pre-calibration clips goes through this route."""
+    client, directory = clip_client
+    unlabelled = "soonsim_20260101_000000.mp4"
+    _touch(directory, unlabelled)
+    _touch(directory, CLIP)
+
+    saved = client.post(f"/api/clips/{CLIP}/label", json={"label": "deferred"})
+    assert saved.status_code == 200
+    assert saved.json() == {"name": CLIP, "label": "deferred"}
+
+    listed = client.get("/api/clips?label=deferred").json()["clips"]
+    assert [c["name"] for c in listed] == [CLIP]
+    assert listed[0]["label"] == "deferred"
+
+    remaining = client.get("/api/clips?label=unlabelled").json()["clips"]
+    assert [c["name"] for c in remaining] == [unlabelled]
+    assert client.get("/api/clips").json()["clips"][0]["label"] == "deferred"
 
 
 def test_clip_routes_reject_unknown_and_out_of_bounds_names(clip_client):

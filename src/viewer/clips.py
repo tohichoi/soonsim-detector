@@ -9,13 +9,16 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from src.viewer.labels import load_labels
+from src.viewer.labels import ALLOWED_LABELS, load_labels
 
 # A clip name is the whole trust boundary: records/ also holds detection*.log
 # and zone_contact.jsonl, and neither may be downloaded through the viewer.
 CLIP_NAME_RE = re.compile(r"^(soonsim|signal)_(\d{8})_(\d{6})\.mp4$")
 KINDS = ("all", "signal", "event")
 KIND_BY_PREFIX = {"soonsim": "event", "signal": "signal"}
+# A filter value, not a stored label: it selects the clips that have no verdict
+# yet, which is the list to work through when labelling.
+UNLABELLED = "unlabelled"
 
 
 def _time_str(date_part: str, time_part: str) -> str:
@@ -30,18 +33,62 @@ def _time_str(date_part: str, time_part: str) -> str:
     )
 
 
-def list_clips(output_dir: Path, kind: str = "all") -> list[dict]:
+def _keep_label(clip_label: Optional[str], wanted: Optional[str]) -> bool:
+    """Whether a clip's verdict passes the requested label filter.
+
+    ``wanted`` is None when the caller did not filter at all, UNLABELLED for the
+    clips without a verdict, or one of the verdicts.
+    """
+    if wanted is None:
+        return True
+    if wanted == UNLABELLED:
+        return clip_label is None
+    return clip_label == wanted
+
+
+def _entry(
+    path: Path,
+    match: re.Match,
+    clip_kind: str,
+    clip_label: Optional[str],
+) -> Optional[dict]:
+    """Build the listing entry for one clip, or None when it has vanished."""
+    try:
+        size_bytes = path.stat().st_size
+    except OSError:
+        # Retention pruned it between the glob and here; it is not a clip the
+        # viewer can offer, so it is simply not listed.
+        return None
+    return {
+        "name": path.name,
+        "kind": clip_kind,
+        "time_str": _time_str(match.group(2), match.group(3)),
+        "size_bytes": size_bytes,
+        "label": clip_label,
+    }
+
+
+def list_clips(
+    output_dir: Path,
+    kind: str = "all",
+    label: Optional[str] = None,
+) -> list[dict]:
     """Describe every recorded clip, newest first.
 
     ``kind`` is "all", "signal" (kept on a miss) or "event" (a confirmed visit).
-    A bad kind raises ValueError; the route turns that into a 400.
+    ``label`` narrows by verdict: omitted for every clip, "unlabelled" for the
+    ones nobody has judged, or one of the verdicts. The two filters combine.
+    An unknown value raises ValueError; the route turns that into a 400.
     """
     if kind not in KINDS:
         raise ValueError(f"Unsupported kind: {kind!r}")
+    if label is not None and label != UNLABELLED and label not in ALLOWED_LABELS:
+        raise ValueError(f"Unsupported label: {label!r}")
 
     directory = Path(output_dir)
     if not directory.is_dir():
         return []
+    # Read the label log once for the whole listing, never per clip.
     labels = load_labels(directory)
 
     found: list[tuple[str, dict]] = []
@@ -52,22 +99,12 @@ def list_clips(output_dir: Path, kind: str = "all") -> list[dict]:
         clip_kind = KIND_BY_PREFIX[match.group(1)]
         if kind != "all" and kind != clip_kind:
             continue
-        try:
-            size_bytes = path.stat().st_size
-        except OSError:
-            # Retention pruned it between the glob and here; it is not a clip
-            # the viewer can offer, so it is simply not listed.
+        clip_label = labels.get(path.name)
+        if not _keep_label(clip_label, label):
             continue
-        found.append((
-            match.group(2) + match.group(3),
-            {
-                "name": path.name,
-                "kind": clip_kind,
-                "time_str": _time_str(match.group(2), match.group(3)),
-                "size_bytes": size_bytes,
-                "label": labels.get(path.name),
-            },
-        ))
+        entry = _entry(path, match, clip_kind, clip_label)
+        if entry is not None:
+            found.append((match.group(2) + match.group(3), entry))
 
     found.sort(key=lambda item: item[0], reverse=True)
     return [entry for _, entry in found]

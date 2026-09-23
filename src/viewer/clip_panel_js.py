@@ -1,22 +1,35 @@
-"""Behaviour for the clip review panel (see clip_panel.py for the markup).
+"""Clip panel behaviour, part 1: state, list rendering and data access.
 
-Kept in its own module because the viewer serves plain strings and the panel's
-markup and script together blow past the 300-line file cap. Wrapped in an IIFE
-so nothing leaks into the viewer's global scope.
+Spliced with ``clip_panel_wiring.py`` into a single IIFE by ``clip_panel.py``,
+so both halves share one scope and no interface has to be exported. They are
+kept apart only because the viewer serves plain strings and one file would blow
+past the 300-line cap.
 """
 
-CLIP_PANEL_JS = """
-(function () {
+CLIP_PANEL_JS_CORE = """
     const KIND_TEXT = { signal: '신호', event: '이벤트' };
     const LABELS = {
         real: { text: '진짜 배변', cls: 'clip-label-real' },
         false: { text: '오탐', cls: 'clip-label-false' },
         unsure: { text: '판단 보류', cls: 'clip-label-unsure' },
+        // Different from unsure: unsure is "a human could not decide", deferred
+        // is "recorded before the 2026-09-21 camera-roll fix, so out of scope".
+        // Kept apart so the tuning data set is not contaminated.
+        deferred: { text: '보류 · 구 좌표계', cls: 'clip-label-deferred' },
     };
     const NO_LABEL = { text: '미분류', cls: 'clip-label-none' };
+    // What each tab's recordings actually are; shown under the panel title and
+    // announced politely on tab change.
+    const TAB_DESC = {
+        event: '탐지기가 순심이가 배변판에 있다고 판단해 저장한 영상입니다. 텔레그램 알림이 발송됩니다. 진짜 배변이 아닌 것을 찾아 오탐으로 표시하면, 배변판 진입·체류 임계값을 조정하는 근거가 됩니다.',
+        signal: '움직임은 감지됐는데 탐지기가 아무것도 찾지 못한 구간의 영상입니다. 텔레그램 알림은 발송되지 않습니다. 탐지기가 놓친 배변이 섞여 있을 수 있어, 진짜 배변을 찾으면 검출 임계값이나 조명 문제를 봐야 한다는 신호입니다.',
+        all: '이벤트와 시그널을 함께 표시합니다. 이벤트는 탐지기가 배변으로 판단한 영상, 시그널은 움직임은 있었지만 탐지기가 찾지 못한 영상입니다.',
+    };
 
     const listEl = document.getElementById('clipList');
     const countEl = document.getElementById('clipCountBadge');
+    const descEl = document.getElementById('clipTabDesc');
+    const unlabelledEl = document.getElementById('clipUnlabelledOnly');
     const modalEl = document.getElementById('clipModal');
     const videoEl = document.getElementById('clipVideo');
     const titleEl = document.getElementById('clipModalTitle');
@@ -26,10 +39,22 @@ CLIP_PANEL_JS = """
     const prevBtn = document.getElementById('clipPrevBtn');
     const nextBtn = document.getElementById('clipNextBtn');
 
-    let kind = 'signal';
+    // Events first: the false alarms cluster there, so that is what the
+    // operator should be looking at on arrival.
+    let kind = 'event';
+    let unlabelledOnly = false;
     let clips = [];
-    let openIndex = -1;
-    let lastTrigger = null;
+    // The clip the player is showing, tracked by name: every load() swaps the
+    // whole clips array for fresh objects, so an object reference goes stale.
+    let openName = null;
+    // Where that clip sits in clips. An integer, so that when the open clip
+    // leaves a filtered list this naturally points at the clip that took its
+    // place -- i.e. the next one to review.
+    let lastIndex = -1;
+    // Bumped on every load(); a response whose seq is stale (a newer load
+    // started) is discarded, so a slow early response cannot overwrite the
+    // newer list.
+    let loadSeq = 0;
     let toastTimer = null;
 
     function labelInfo(label) {
@@ -68,14 +93,40 @@ CLIP_PANEL_JS = """
         listEl.appendChild(li);
     }
 
+    function updateTabDescription() {
+        if (!descEl) return;
+        const text = TAB_DESC[kind] || '';
+        // The initial markup already carries the event sentence; skip the
+        // reassignment when it would not change anything.
+        if (descEl.textContent !== text) descEl.textContent = text;
+    }
+
+    // Re-seat lastIndex after clips is replaced: follow the open clip by name
+    // when it survived. When it is gone the slot may sit one past the end (the
+    // open clip was last), so the range is [0, len], not [0, len-1].
+    function syncIndex() {
+        const i = clips.findIndex(function (c) { return c.name === openName; });
+        if (i >= 0) {
+            lastIndex = i;
+        } else if (clips.length === 0) {
+            lastIndex = -1;
+        } else if (lastIndex > clips.length) {
+            lastIndex = clips.length;
+        } else if (lastIndex < 0) {
+            lastIndex = 0;
+        }
+    }
+
     function render() {
         listEl.replaceChildren();
         countEl.textContent = clips.length + '건';
         if (clips.length === 0) {
-            showState('해당 종류의 녹화 클립이 없습니다.', false);
+            showState(unlabelledOnly
+                ? '미분류 클립이 없습니다. 모두 분류되었습니다.'
+                : '해당 종류의 녹화 클립이 없습니다.', false);
             return;
         }
-        clips.forEach(function (clip, idx) {
+        clips.forEach(function (clip) {
             const typeText = KIND_TEXT[clip.kind] || clip.kind;
             const li = document.createElement('li');
             const btn = document.createElement('button');
@@ -83,7 +134,7 @@ CLIP_PANEL_JS = """
             btn.className = 'clip-item';
             btn.dataset.clipName = clip.name;
             btn.setAttribute('aria-label', clip.time_str + ' ' + typeText + ' 클립 재생 및 라벨링');
-            btn.addEventListener('click', function () { openClip(idx, btn); });
+            btn.addEventListener('click', function () { openClipAt(clip); });
 
             const time = document.createElement('span');
             time.className = 'clip-time';
@@ -137,163 +188,40 @@ CLIP_PANEL_JS = """
         );
     }
 
+    // Reloads the list. When the player is open the clip stays open and its
+    // position is re-seated (syncIndex), so refresh / filter changes move by
+    // position instead of dropping the player.
     async function load() {
+        const seq = ++loadSeq;
         listEl.setAttribute('aria-busy', 'true');
         countEl.textContent = '—';
         showState('클립을 불러오는 중...', false);
         try {
-            const res = await fetch('/api/clips?kind=' + encodeURIComponent(kind));
+            let url = '/api/clips?kind=' + encodeURIComponent(kind);
+            if (unlabelledOnly) url += '&label=unlabelled';
+            const res = await fetch(url);
+            if (seq !== loadSeq) return;
             if (res.status === 401) {
                 sessionExpired();
                 return;
             }
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const data = await res.json();
+            // A newer load started while this one was in flight: drop it so the
+            // checkbox and the list cannot disagree.
+            if (seq !== loadSeq) return;
             clips = Array.isArray(data.clips) ? data.clips : [];
+            if (openName) syncIndex();
             render();
+            updatePager();
         } catch (err) {
+            if (seq !== loadSeq) return;
             console.error('clip list request failed:', err);
             clips = [];
             countEl.textContent = '—';
-            showState('클립 목록을 불러오지 못했습니다.', true, '다시 시도', load);
+            showState('클립 목록을 불러오지 못했습니다.', true, '다시 시도', function () { load(); });
         } finally {
-            listEl.setAttribute('aria-busy', 'false');
+            if (seq === loadSeq) listEl.setAttribute('aria-busy', 'false');
         }
     }
-
-    function paintLabelState(label) {
-        stateEl.textContent = '현재 라벨: ' + labelInfo(label).text;
-        const btns = document.querySelectorAll('.label-btn');
-        for (let i = 0; i < btns.length; i++) {
-            btns[i].setAttribute('aria-pressed', btns[i].dataset.label === label ? 'true' : 'false');
-        }
-    }
-
-    function openClip(idx, trigger) {
-        if (idx < 0 || idx >= clips.length) return;
-        const clip = clips[idx];
-        openIndex = idx;
-        if (trigger) lastTrigger = trigger;
-
-        titleEl.textContent = clip.name;
-        timeEl.textContent = clip.time_str;
-        videoEl.src = '/api/clips/' + encodeURIComponent(clip.name);
-        paintLabelState(clip.label);
-
-        prevBtn.style.display = idx > 0 ? 'inline-flex' : 'none';
-        nextBtn.style.display = idx < clips.length - 1 ? 'inline-flex' : 'none';
-
-        modalEl.classList.add('active');
-        videoEl.focus();
-        const played = videoEl.play();
-        if (played && played.catch) played.catch(function () {});
-    }
-
-    function closeClipModal() {
-        modalEl.classList.remove('active');
-        videoEl.pause();
-        videoEl.removeAttribute('src');
-        videoEl.load();
-        openIndex = -1;
-        if (document.fullscreenElement === modalEl) {
-            document.exitFullscreen().catch(function () {});
-        }
-        // Return focus to the list item that opened the player.
-        if (lastTrigger && document.contains(lastTrigger)) lastTrigger.focus();
-        lastTrigger = null;
-    }
-
-    function navigateClip(delta) {
-        if (openIndex < 0) return;
-        openClip(openIndex + delta, lastTrigger);
-    }
-
-    function toggleClipFullscreen() {
-        if (!document.fullscreenElement) {
-            modalEl.requestFullscreen().catch(function () {});
-        } else {
-            document.exitFullscreen().catch(function () {});
-        }
-    }
-
-    function setLabelBusy(busy) {
-        const btns = document.querySelectorAll('.label-btn');
-        for (let i = 0; i < btns.length; i++) btns[i].disabled = busy;
-    }
-
-    async function setClipLabel(label) {
-        if (openIndex < 0) return;
-        const clip = clips[openIndex];
-        setLabelBusy(true);
-        try {
-            const res = await fetch(
-                '/api/clips/' + encodeURIComponent(clip.name) + '/label',
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ label: label }),
-                }
-            );
-            if (res.status === 401) {
-                showToast('세션이 만료되었습니다. 페이지를 새로고침한 뒤 다시 로그인해 주세요.', true);
-                return;
-            }
-            if (!res.ok) {
-                showToast('라벨을 저장하지 못했습니다.', true);
-                return;
-            }
-            const data = await res.json();
-            clip.label = data.label !== undefined ? data.label : label;
-            paintLabelState(clip.label);
-            updateBadge(clip.name, clip.label);
-            showToast('라벨을 저장했습니다.');
-        } catch (err) {
-            console.error('label request failed:', err);
-            showToast('서버와 통신할 수 없습니다.', true);
-        } finally {
-            setLabelBusy(false);
-        }
-    }
-
-    const tabs = document.querySelectorAll('.clip-tab[data-kind]');
-    for (let i = 0; i < tabs.length; i++) {
-        tabs[i].addEventListener('click', function () {
-            kind = tabs[i].dataset.kind;
-            for (let j = 0; j < tabs.length; j++) {
-                tabs[j].setAttribute('aria-pressed', tabs[j] === tabs[i] ? 'true' : 'false');
-            }
-            load();
-        });
-    }
-    document.getElementById('clipRefreshBtn').addEventListener('click', load);
-    document.getElementById('clipCloseBtn').addEventListener('click', closeClipModal);
-    prevBtn.addEventListener('click', function () { navigateClip(-1); });
-    nextBtn.addEventListener('click', function () { navigateClip(1); });
-    document.getElementById('clipClearBtn').addEventListener('click', function () { setClipLabel(null); });
-    const labelBtns = document.querySelectorAll('.label-btn[data-label]');
-    for (let i = 0; i < labelBtns.length; i++) {
-        labelBtns[i].addEventListener('click', function () { setClipLabel(labelBtns[i].dataset.label); });
-    }
-
-    // Capture phase so the viewer's global shortcuts (F opens the live theater,
-    // arrows walk snapshots) never fire while a clip is open.
-    window.addEventListener('keydown', function (e) {
-        if (!modalEl.classList.contains('active')) return;
-        if (e.key === 'Escape') {
-            closeClipModal();
-        } else if (e.key === 'f' || e.key === 'F') {
-            toggleClipFullscreen();
-        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-            navigateClip(-1);
-        } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-            navigateClip(1);
-        } else {
-            return;
-        }
-        e.preventDefault();
-        e.stopPropagation();
-    }, true);
-
-    load();
-})();
 """

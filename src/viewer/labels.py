@@ -11,8 +11,14 @@ from pathlib import Path
 from typing import Optional
 
 # A label is a verdict about one clip, so the vocabulary stays tiny. Anything
-# else is a typo, not a fourth category.
-ALLOWED_LABELS = ("real", "false", "unsure")
+# else is a typo, not a fifth category.
+#
+# "deferred" is deliberately not folded into "unsure". unsure means a person
+# looked and could not decide; deferred means the clip cannot answer the
+# question at all (it predates the 2026-09-21 roll calibration, so its screen is
+# tilted and its pad polygon is not the current one). Only unsure is a
+# judgement, so only it belongs in threshold-tuning data.
+ALLOWED_LABELS = ("real", "false", "unsure", "deferred")
 LABEL_FILE = "clip_labels.jsonl"
 
 # ponytail: one lock for the whole file. Labels are written by hand, so a
