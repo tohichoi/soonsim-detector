@@ -1,4 +1,4 @@
-"""Video clip exporter producing H.264 MP4 files."""
+"""Video clip exporter. sv.VideoSink writes mp4v; recorder/transcode.py adds H.264."""
 
 import datetime
 import time

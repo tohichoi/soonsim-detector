@@ -3,12 +3,15 @@
 import secrets
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from src.config import AppConfig, load_config
-from src.viewer.state import KST, ViewerStateStore
+from src.viewer.clips import list_clips, resolve_clip
+from src.viewer.labels import set_label
+from src.viewer.state import ViewerStateStore
 from src.viewer.templates import HTML_TEMPLATE, LOGIN_HTML_TEMPLATE
 
 AUTH_COOKIE = "soonsim_auth"
@@ -21,6 +24,12 @@ default_state_store = ViewerStateStore()
 
 class LoginRequest(BaseModel):
     pin: str
+
+
+class ClipLabelRequest(BaseModel):
+    """A verdict on one clip; null clears it."""
+
+    label: Optional[str] = None
 
 
 class SessionStore:
@@ -213,6 +222,44 @@ def _register_snapshot_routes(app: FastAPI, store: ViewerStateStore, sessions: S
         return Response(content=record.image_bytes, media_type="image/jpeg")
 
 
+def _register_clip_routes(app: FastAPI, cfg: AppConfig, sessions: SessionStore) -> None:
+    """Register recorded clip browsing, playback, and labelling endpoints."""
+    def require_auth(request: Request) -> None:
+        if not check_auth(request, sessions):
+            raise HTTPException(status_code=401, detail="인증이 필요합니다.")
+
+    output_dir = Path(cfg.recorder.output_dir)
+
+    @app.get("/api/clips")
+    async def get_clips(request: Request, kind: str = "all"):
+        require_auth(request)
+        try:
+            clips = list_clips(output_dir, kind=kind)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="알 수 없는 클립 종류입니다.")
+        return {"clips": clips}
+
+    @app.get("/api/clips/{name}")
+    async def get_clip(name: str, request: Request):
+        require_auth(request)
+        path = resolve_clip(output_dir, name)
+        if path is None:
+            raise HTTPException(status_code=404, detail="클립을 찾을 수 없습니다.")
+        # FileResponse handles Range requests, which seeking a clip needs.
+        return FileResponse(path, media_type="video/mp4")
+
+    @app.post("/api/clips/{name}/label")
+    async def label_clip(name: str, req: ClipLabelRequest, request: Request):
+        require_auth(request)
+        if resolve_clip(output_dir, name) is None:
+            raise HTTPException(status_code=404, detail="클립을 찾을 수 없습니다.")
+        try:
+            set_label(output_dir, name, req.label)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="허용되지 않는 라벨입니다.")
+        return {"name": name, "label": req.label}
+
+
 def create_viewer_app(
     state_store: Optional[ViewerStateStore] = None,
     config: Optional[AppConfig] = None,
@@ -226,6 +273,7 @@ def create_viewer_app(
     _register_auth_routes(app_instance, cfg, sessions, throttle)
     _register_telemetry_routes(app_instance, store, sessions)
     _register_snapshot_routes(app_instance, store, sessions)
+    _register_clip_routes(app_instance, cfg, sessions)
     return app_instance
 
 

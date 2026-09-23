@@ -23,6 +23,7 @@ from src.notifier.telegram import TelegramNotifier
 from src.recorder.annotator import HighContrastAnnotator
 from src.recorder.exporter import VideoClipExporter, prune_old_clips
 from src.recorder.signal_recorder import SignalRecorder
+from src.recorder.transcode import to_h264
 from src.utils.telemetry import InferenceTelemetry
 from src.viewer.live_feed import LiveFeed
 from src.viewer.server import ViewerServer
@@ -127,13 +128,17 @@ class SoonsimService:
                 if path is None:
                     return
                 self._prune_clips()
-                if not notify:
-                    return
-                self.notifier.send_video(path, event.duration_sec, event.start_time)
-                self.alerts_count += 1
-                self.last_alert_time = datetime.datetime.fromtimestamp(
-                    event.start_time, tz=KST
-                ).strftime("%Y-%m-%d %H:%M:%S")
+                if notify:
+                    self.notifier.send_video(path, event.duration_sec, event.start_time)
+                    self.alerts_count += 1
+                    self.last_alert_time = datetime.datetime.fromtimestamp(
+                        event.start_time, tz=KST
+                    ).strftime("%Y-%m-%d %H:%M:%S")
+                # Conversion serves browser playback only, and Telegram plays
+                # mp4v fine, so it runs last: the alert and the prune never wait
+                # on ffmpeg. A clip that fails to convert is kept as exported.
+                if not to_h264(path):
+                    logger.warning(f"{path.name} is not H.264; keeping it as exported.")
             except Exception as e:
                 logger.error(f"Error exporting clip: {e}")
 

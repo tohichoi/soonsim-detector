@@ -1,5 +1,7 @@
 """HTML UI templates for Soonsim Detector Web Viewer."""
 
+from src.viewer.clip_panel import CLIP_PANEL_HTML
+
 LOGIN_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ko">
@@ -747,6 +749,8 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
+    <!-- CLIP_PANEL -->
+
     <!-- Netflix-style Cinema / Fullscreen Modal Component -->
     <div id="theaterModal" class="theater-modal" role="dialog" aria-modal="true">
         <div class="theater-header">
@@ -1109,4 +1113,7 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
+# The clip review panel lives in its own module; splice it into the placeholder.
+HTML_TEMPLATE = HTML_TEMPLATE.replace("<!-- CLIP_PANEL -->", CLIP_PANEL_HTML)
 

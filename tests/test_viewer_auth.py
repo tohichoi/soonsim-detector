@@ -102,7 +102,7 @@ def test_repeated_failures_lock_out_login():
 
 def test_kst_timestamp_format():
     import datetime
-    from src.viewer.app import KST
+    from src.viewer.state import KST
     now = datetime.datetime.fromtimestamp(1700000000, tz=KST)
     assert now.strftime("%Y-%m-%d %H:%M:%S") == "2023-11-15 07:13:20"
     assert now.tzinfo.key == "Asia/Seoul"
