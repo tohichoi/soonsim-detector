@@ -29,7 +29,7 @@ class ZoneConfig(BaseModel):
 class DetectorConfig(BaseModel):
     model_name: str = Field(default="yolov8n.pt")
     confidence_threshold: float = Field(default=0.30, ge=0.1, le=1.0)
-    animal_class_ids: List[int] = Field(default=[15, 16])
+    animal_class_ids: List[int] = Field(default=[15, 16, 77])
     track_thresh: float = Field(default=0.20, ge=0.1, le=1.0)
     match_thresh: float = Field(default=0.8, ge=0.1, le=1.0)
     lost_track_buffer_sec: float = Field(default=2.0, ge=0.5, le=30.0)

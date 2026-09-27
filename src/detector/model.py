@@ -16,7 +16,7 @@ class DogDetector:
         self,
         model_name: str = "yolov8n.pt",
         confidence_threshold: float = 0.30,
-        class_ids: Union[int, List[int]] = [15, 16],
+        class_ids: Union[int, List[int]] = [15, 16, 77],
         max_threads: int = 2,
     ):
         try:

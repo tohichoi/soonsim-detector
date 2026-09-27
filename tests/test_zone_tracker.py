@@ -85,3 +85,41 @@ def test_last_telemetry_is_available_outside_events():
     # A zero buffer total means the frame was never handed to _build_telemetry(),
     # which is exactly how the HUD silently vanished from the live view.
     assert tracker.last_telemetry.lost_buffer_total > 0
+
+
+def test_pooping_pose_teddy_bear_recovery():
+    """Verify that when a dog shifts to teddy bear (class 77) during pooping, tracking stays ACTIVE."""
+    polygon = [(100, 100), (300, 100), (300, 300), (100, 300)]
+    tracker = ZoneTracker(
+        polygon=polygon,
+        fps=10,
+        post_buffer_sec=1,
+        min_stay_duration_sec=0.2,
+    )
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+
+    dog_det = sv.Detections(
+        xyxy=np.array([[150.0, 150.0, 250.0, 250.0]]),
+        confidence=np.array([0.8]),
+        class_id=np.array([16]),
+    )
+    teddy_det = sv.Detections(
+        xyxy=np.array([[150.0, 150.0, 250.0, 250.0]]),
+        confidence=np.array([0.5]),
+        class_id=np.array([77]),
+    )
+
+    # 1. Dog enters zone
+    p1 = FramePacket(frame=frame, timestamp=1.0, frame_idx=1)
+    tracker.update(p1, dog_det, [])
+    p2 = FramePacket(frame=frame, timestamp=1.1, frame_idx=2)
+    tracker.update(p2, dog_det, [])
+    assert tracker.status == EventStatus.ACTIVE
+
+    # 2. Dog poses into teddy bear (class 77) on pad -> stays ACTIVE
+    p3 = FramePacket(frame=frame, timestamp=1.2, frame_idx=3)
+    _, in_zone, event = tracker.update(p3, teddy_det, [])
+    assert in_zone
+    assert tracker.status == EventStatus.ACTIVE
+    assert event is None
+

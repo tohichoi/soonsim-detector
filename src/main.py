@@ -195,7 +195,8 @@ class SoonsimService:
             self.ring_buffer.append(packet)
 
         is_active = (self.tracker.status == EventStatus.ACTIVE)
-        detections, diff, is_signal = self._evaluate_detector(packet, is_active)
+        is_in_event = self.tracker.status in (EventStatus.ACTIVE, EventStatus.COOLDOWN)
+        detections, diff, is_signal = self._evaluate_detector(packet, is_in_event)
         _, in_zone, completed = self.tracker.update(packet, detections, pre)
 
         if completed:
