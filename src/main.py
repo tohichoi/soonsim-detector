@@ -11,6 +11,7 @@ from typing import Any, Dict
 from zoneinfo import ZoneInfo
 from loguru import logger
 from rich.live import Live
+import cv2
 import supervision as sv
 from src.capture.stream import FramePacket, RingBuffer, VideoStreamReader
 from src.cli.dashboard import Dashboard
@@ -84,6 +85,7 @@ class SoonsimService:
             lost_track_buffer_sec=self.config.detector.lost_track_buffer_sec,
             post_buffer_sec=self.config.recorder.post_buffer_sec,
             min_stay_duration_sec=self.config.recorder.min_stay_duration_sec,
+            instant_alert_stay_sec=self.config.telegram.instant_alert_stay_sec,
             contact_log=self.contact_log,
         )
         self.annotator = HighContrastAnnotator(
@@ -144,6 +146,25 @@ class SoonsimService:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _send_instant_alert_async(self, packet: FramePacket, detections: sv.Detections, stay_sec: float) -> None:
+        """Send instant snapshot photo alert asynchronously."""
+        def worker():
+            try:
+                annotated = self.annotator.annotate(
+                    packet.frame,
+                    detections,
+                    timestamp=packet.timestamp,
+                    is_dog_in_zone=True,
+                    telemetry=self.tracker.last_telemetry,
+                )
+                ret, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if ret:
+                    self.notifier.send_photo(buf.tobytes(), stay_sec, packet.timestamp)
+            except Exception as e:
+                logger.error(f"Error sending instant alert photo: {e}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _prune_clips(self) -> None:
         """Drop clips past the retention window; a full volume stops the service."""
         removed = prune_old_clips(
@@ -198,6 +219,12 @@ class SoonsimService:
         is_in_event = self.tracker.status in (EventStatus.ACTIVE, EventStatus.COOLDOWN)
         detections, diff, is_signal = self._evaluate_detector(packet, is_in_event)
         _, in_zone, completed = self.tracker.update(packet, detections, pre)
+
+        telegram_cfg = getattr(self.config, "telegram", None)
+        if telegram_cfg and getattr(telegram_cfg, "enabled", False) and getattr(telegram_cfg, "instant_alert_enabled", False):
+            instant_stay = self.tracker.pop_instant_alert()
+            if instant_stay is not None:
+                self._send_instant_alert_async(packet, detections, instant_stay)
 
         if completed:
             self.ring_buffer.clear()

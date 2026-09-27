@@ -11,6 +11,8 @@ def test_load_config_default_fallback():
     assert len(config.zone.polygon) >= 3
     assert config.detector.animal_class_ids == [15, 16, 77]
     assert config.recorder.pre_buffer_sec == 5
+    assert config.telegram.instant_alert_enabled is True
+    assert config.telegram.instant_alert_stay_sec == 1.0
 
 
 def test_load_config_nonexistent(tmp_path: Path):

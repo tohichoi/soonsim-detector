@@ -52,6 +52,7 @@ class ZoneTracker:
         lost_track_buffer_sec: float = 2.0,
         post_buffer_sec: int = 5,
         min_stay_duration_sec: float = 1.0,
+        instant_alert_stay_sec: float = 1.0,
         contact_log: Optional[ZoneContactLog] = None,
     ):
         self.polygon_np = np.array(polygon, dtype=np.int32)
@@ -76,12 +77,15 @@ class ZoneTracker:
         self.fps = fps
         self.post_buffer_frames = post_buffer_sec * fps
         self.min_stay_duration_sec = min_stay_duration_sec
+        self.instant_alert_stay_sec = instant_alert_stay_sec
 
         self.status = EventStatus.IDLE
         self.event_start_time: Optional[float] = None
         self.stay_start_time: Optional[float] = None
         self.stay_end_time: Optional[float] = None
         self.cooldown_counter = 0
+        self.instant_alert_pending: bool = False
+        self.instant_alert_triggered: bool = False
 
         self._current_event_frames: List[FramePacket] = []
         self._current_event_detections: List[sv.Detections] = []
@@ -192,6 +196,11 @@ class ZoneTracker:
                 self.status = EventStatus.COOLDOWN
                 self.stay_end_time = packet.timestamp
                 self.cooldown_counter = 0
+            else:
+                stay_sec = (packet.timestamp - self.stay_start_time) if self.stay_start_time is not None else 0.0
+                if not self.instant_alert_triggered and stay_sec >= self.instant_alert_stay_sec:
+                    self.instant_alert_pending = True
+                    self.instant_alert_triggered = True
             self._record_frame(packet, tracked_detections)
         elif self.status == EventStatus.COOLDOWN:
             self._record_frame(packet, tracked_detections)
@@ -221,6 +230,13 @@ class ZoneTracker:
 
         return tracked_detections, dog_in_zone, completed_event
 
+    def pop_instant_alert(self) -> Optional[float]:
+        """Return stay duration if instant alert is pending, and clear pending flag."""
+        if self.instant_alert_pending:
+            self.instant_alert_pending = False
+            return self.last_telemetry.stay_sec if self.last_telemetry else self.instant_alert_stay_sec
+        return None
+
     def reset(self) -> None:
         """Reset state to IDLE."""
         self.status = EventStatus.IDLE
@@ -228,6 +244,8 @@ class ZoneTracker:
         self.stay_start_time = None
         self.stay_end_time = None
         self.cooldown_counter = 0
+        self.instant_alert_pending = False
+        self.instant_alert_triggered = False
         self._current_event_frames.clear()
         self._current_event_detections.clear()
         self._current_event_telemetry.clear()

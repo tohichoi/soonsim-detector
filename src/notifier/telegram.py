@@ -54,6 +54,43 @@ class TelegramNotifier:
             logger.error(f"Failed to send Telegram video notification: {e}")
             return False
 
+    async def send_photo_async(self, photo_bytes: bytes, stay_duration_sec: float, start_time: float) -> bool:
+        """Send instant snapshot photo asynchronously with structured caption."""
+        time_str = datetime.datetime.fromtimestamp(start_time, tz=KST).strftime("%Y-%m-%d %H:%M:%S")
+        caption = (
+            f"[🚨 순심이 배변판 진입 즉시 알림]\n"
+            f"일시: {time_str}\n"
+            f"체류 시간: {stay_duration_sec:.1f}초 감지됨\n"
+            f"(배변 완료 후 전체 영상이 전송됩니다)"
+        )
+
+        if not self.is_active:
+            logger.info(f"[Dry-Run Instant Photo Notification]\n{caption} (photo bytes: {len(photo_bytes)})")
+            return True
+
+        try:
+            bot = Bot(token=self.config.bot_token)
+            await bot.send_photo(
+                chat_id=self.config.chat_id,
+                photo=photo_bytes,
+                caption=caption,
+                write_timeout=30,
+                read_timeout=30,
+            )
+            logger.info(f"Successfully sent instant entry photo to Telegram chat {self.config.chat_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send Telegram instant photo: {e}")
+            return False
+
+    def send_photo(self, photo_bytes: bytes, stay_duration_sec: float, start_time: float) -> bool:
+        """Synchronous wrapper for sending snapshot photo."""
+        try:
+            return asyncio.run(self.send_photo_async(photo_bytes, stay_duration_sec, start_time))
+        except Exception as e:
+            logger.error(f"Error in send_photo execution: {e}")
+            return False
+
     def send_video(self, video_path: Path, stay_duration_sec: float, start_time: float) -> bool:
         """Synchronous wrapper for sending video."""
         try:
@@ -61,3 +98,4 @@ class TelegramNotifier:
         except Exception as e:
             logger.error(f"Error in send_video execution: {e}")
             return False
+

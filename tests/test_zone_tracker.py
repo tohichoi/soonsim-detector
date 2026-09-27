@@ -123,3 +123,43 @@ def test_pooping_pose_teddy_bear_recovery():
     assert tracker.status == EventStatus.ACTIVE
     assert event is None
 
+
+def test_instant_alert_stay_sec_gating():
+    """Verify instant alert triggers only after instant_alert_stay_sec and only once per event."""
+    polygon = [(100, 100), (300, 100), (300, 300), (100, 300)]
+    tracker = ZoneTracker(
+        polygon=polygon,
+        fps=10,
+        instant_alert_stay_sec=1.0,
+        min_stay_duration_sec=1.0,
+    )
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    dog_det = sv.Detections(
+        xyxy=np.array([[150.0, 150.0, 250.0, 250.0]]),
+        confidence=np.array([0.9]),
+        class_id=np.array([16]),
+    )
+
+    # 1. Dog enters zone at t=1.0s
+    p1 = FramePacket(frame=frame, timestamp=1.0, frame_idx=1)
+    tracker.update(p1, dog_det, [])
+    assert tracker.pop_instant_alert() is None
+
+    # 2. Dog stays in zone at t=1.5s (0.5s stay < 1.0s) -> no alert yet
+    p2 = FramePacket(frame=frame, timestamp=1.5, frame_idx=2)
+    tracker.update(p2, dog_det, [])
+    assert tracker.pop_instant_alert() is None
+
+    # 3. Dog stays in zone at t=2.0s (1.0s stay >= 1.0s) -> triggers alert!
+    p3 = FramePacket(frame=frame, timestamp=2.0, frame_idx=3)
+    tracker.update(p3, dog_det, [])
+    alert_duration = tracker.pop_instant_alert()
+    assert alert_duration is not None
+    assert alert_duration >= 1.0
+
+    # 4. Next frame in same event -> does NOT trigger again
+    p4 = FramePacket(frame=frame, timestamp=2.5, frame_idx=4)
+    tracker.update(p4, dog_det, [])
+    assert tracker.pop_instant_alert() is None
+
+
