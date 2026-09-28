@@ -127,6 +127,8 @@ CLIP_PANEL_JS_PLAYER = """
             if (openName === name) paintLabelState(saved);
             showToast('라벨을 저장했습니다.');
             if (!unlabelledOnly) {
+                const cur = clips.find(function (c) { return c.name === name; });
+                if (cur) cur.label = saved;
                 updateBadge(name, saved);
             } else if (saved) {
                 // No longer unlabelled, so drop it by name. lastIndex stays on

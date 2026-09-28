@@ -29,9 +29,7 @@ class TelegramNotifier:
         time_str = datetime.datetime.fromtimestamp(start_time, tz=KST).strftime("%Y-%m-%d %H:%M:%S")
         caption = (
             f"[순심이 배변판 감지 알림]\n"
-            f"일시: {time_str}\n"
-            f"배변판 체류 시간: {stay_duration_sec:.1f}초\n"
-            f"영상 파일: {video_path.name}"
+            f"일시: {time_str}"
         )
 
         if not self.is_active:

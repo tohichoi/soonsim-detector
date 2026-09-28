@@ -40,6 +40,7 @@ class HighContrastAnnotator:
             thickness=2,
             text_thickness=1,
             text_scale=0.5,
+            display_in_zone_count=False,
         )
         self.hud = TelemetryHud(min_stay_sec=min_stay_duration_sec, fps=fps)
         # Zone entry is decided by these two points, so the diagnostic overlay

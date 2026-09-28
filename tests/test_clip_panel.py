@@ -88,3 +88,9 @@ def test_deferred_is_a_label_separate_from_unsure():
     assert "deferred: { text: '보류 · 구 좌표계', cls: 'clip-label-deferred' }" in CLIP_PANEL_HTML
     assert ".clip-label-deferred" in CLIP_PANEL_HTML
     assert "clip-label-deferred" not in CLIP_PANEL_HTML.split(".clip-label-unsure")[0]
+
+
+def test_saved_label_updates_in_memory_clip_object():
+    assert "const cur = clips.find(function (c) { return c.name === name; });" in CLIP_PANEL_HTML
+    assert "if (cur) cur.label = saved;" in CLIP_PANEL_HTML
+

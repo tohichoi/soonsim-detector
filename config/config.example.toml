@@ -188,7 +188,7 @@ bot_token = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
 chat_id = "YOUR_TELEGRAM_CHAT_ID_HERE"
 
 # 배변판 진입 즉시 1차 사진 알림을 보낼지 여부입니다. (동영상 완성 전 0.1초 초고속 선발송)
-instant_alert_enabled = true
+instant_alert_enabled = false
 
 # 배변판에 올라와 이 시간(초) 이상 연속으로 머물렀을 때 즉시 1차 사진 알림을 전송합니다.
 # 단순 통과(스쳐 지나감)를 거르고 배변을 위해 자리 잡는 순간을 1초 만에 알립니다.

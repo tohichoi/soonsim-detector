@@ -62,7 +62,7 @@ class TelegramConfig(BaseModel):
     enabled: bool = Field(default=False)
     bot_token: str = Field(default="")
     chat_id: str = Field(default="")
-    instant_alert_enabled: bool = Field(default=True)
+    instant_alert_enabled: bool = Field(default=False)
     instant_alert_stay_sec: float = Field(default=1.0, ge=0.1, le=10.0)
 
 
