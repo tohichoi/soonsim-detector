@@ -24,6 +24,11 @@ class ZoneConfig(BaseModel):
     polygon: List[Tuple[int, int]] = Field(
         default=[[180, 140], [460, 140], [460, 330], [180, 330]]
     )
+    # Filter out oversized perspective boxes when dog passes in front of pad
+    max_box_area: float = Field(default=55000.0, ge=1000.0, le=230400.0)
+    max_box_width: float = Field(default=380.0, ge=50.0, le=640.0)
+    # Ground margin: (y1 - pad_bottom) / box_height. > 0 means nearer than pad.
+    max_ground_margin: float = Field(default=0.10, ge=-1.0, le=1.0)
 
 
 class DetectorConfig(BaseModel):

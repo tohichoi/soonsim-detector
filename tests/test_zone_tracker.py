@@ -163,3 +163,59 @@ def test_instant_alert_stay_sec_gating():
     assert tracker.pop_instant_alert() is None
 
 
+def test_perspective_oversized_box_rejected():
+    """Verify that oversized dog bounding boxes (walking close to camera) do not trigger in-zone."""
+    polygon = [(164, 201), (299, 271), (438, 211), (289, 164)]
+    tracker = ZoneTracker(
+        polygon=polygon,
+        fps=15,
+        max_box_area=55000.0,
+        max_box_width=380.0,
+        max_ground_margin=0.10,
+    )
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+
+    # Oversized box from 22:41 passby: box=[145, 106, 638, 352], w=493, h=246, area=121278
+    huge_passby_det = sv.Detections(
+        xyxy=np.array([[145.0, 106.0, 638.0, 352.0]]),
+        confidence=np.array([0.9]),
+        class_id=np.array([16]),
+    )
+    p1 = FramePacket(frame=frame, timestamp=1.0, frame_idx=1)
+    tracker.update(p1, huge_passby_det, [])
+    p2 = FramePacket(frame=frame, timestamp=1.1, frame_idx=2)
+    _, in_zone, event = tracker.update(p2, huge_passby_det, [])
+
+    assert not in_zone
+    assert tracker.status == EventStatus.IDLE
+    assert event is None
+
+
+def test_perspective_passby_depth_rejected():
+    """Verify that dog with feet in front of pad (margin > max_ground_margin) is rejected."""
+    polygon = [(164, 201), (299, 271), (438, 211), (289, 164)]
+    tracker = ZoneTracker(
+        polygon=polygon,
+        fps=15,
+        max_box_area=55000.0,
+        max_box_width=380.0,
+        max_ground_margin=0.10,
+    )
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+
+    # Box passing in front of pad with bottom y1=348 (pad_bottom=271, margin ≈ +0.22 > 0.10)
+    front_passby_det = sv.Detections(
+        xyxy=np.array([[200.0, 50.0, 350.0, 348.0]]),  # w=150, h=298, area=44700 (<55000)
+        confidence=np.array([0.9]),
+        class_id=np.array([16]),
+    )
+    p1 = FramePacket(frame=frame, timestamp=1.0, frame_idx=1)
+    tracker.update(p1, front_passby_det, [])
+    p2 = FramePacket(frame=frame, timestamp=1.1, frame_idx=2)
+    _, in_zone, event = tracker.update(p2, front_passby_det, [])
+
+    assert not in_zone
+    assert tracker.status == EventStatus.IDLE
+    assert event is None
+
+

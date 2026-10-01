@@ -87,6 +87,9 @@ class SoonsimService:
             min_stay_duration_sec=self.config.recorder.min_stay_duration_sec,
             instant_alert_stay_sec=self.config.telegram.instant_alert_stay_sec,
             contact_log=self.contact_log,
+            max_box_area=self.config.zone.max_box_area,
+            max_box_width=self.config.zone.max_box_width,
+            max_ground_margin=self.config.zone.max_ground_margin,
         )
         self.annotator = HighContrastAnnotator(
             zone=self.tracker.zone,

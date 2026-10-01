@@ -54,14 +54,20 @@ class ZoneTracker:
         min_stay_duration_sec: float = 1.0,
         instant_alert_stay_sec: float = 1.0,
         contact_log: Optional[ZoneContactLog] = None,
+        max_box_area: float = 55000.0,
+        max_box_width: float = 380.0,
+        max_ground_margin: float = 0.10,
     ):
         self.polygon_np = np.array(polygon, dtype=np.int32)
         self.zone = sv.PolygonZone(
             polygon=self.polygon_np,
-            triggering_anchors=(sv.Position.CENTER, sv.Position.BOTTOM_CENTER),
+            triggering_anchors=(sv.Position.BOTTOM_CENTER,),
             require_all_anchors=False,
         )
-        # Measured every frame, recorded to contact_log, not yet part of the verdict.
+        self.max_box_area = max_box_area
+        self.max_box_width = max_box_width
+        self.max_ground_margin = max_ground_margin
+        # Measured every frame, recorded to contact_log, and checked in verdict.
         self.pad_geometry = PadGeometry(self.zone.mask)
         self.contact_log = contact_log
         self.tracker = sv.ByteTrack(
@@ -155,6 +161,26 @@ class ZoneTracker:
         self._current_event_detections.append(tracked_detections)
         self._current_event_telemetry.append(self.last_telemetry)
 
+    def _is_valid_contact(self, detections: sv.Detections, in_zone_mask: np.ndarray) -> bool:
+        """Validate whether any in-zone detection meets perspective size and depth constraints."""
+        if not np.any(in_zone_mask) or detections.xyxy is None or len(detections.xyxy) == 0:
+            return False
+        for i, in_zone in enumerate(in_zone_mask):
+            if not in_zone:
+                continue
+            box = detections.xyxy[i]
+            x0, y0, x1, y1 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+            w = x1 - x0
+            h = y1 - y0
+            area = w * h
+            if area > self.max_box_area or w > self.max_box_width:
+                continue
+            metrics = self.pad_geometry.measure(box)
+            if metrics is not None and metrics.margin > self.max_ground_margin:
+                continue
+            return True
+        return False
+
     def update(
         self,
         packet: FramePacket,
@@ -164,7 +190,7 @@ class ZoneTracker:
         """Update tracker/zone; return (tracked_detections, in_zone, completed_event)."""
         tracked_detections = self.tracker.update_with_detections(detections)
         is_in_zone = self.zone.trigger(detections=tracked_detections)
-        dog_in_zone = bool(np.any(is_in_zone)) if len(is_in_zone) > 0 else False
+        dog_in_zone = self._is_valid_contact(tracked_detections, is_in_zone)
         self.last_contact = self.pad_geometry.largest(tracked_detections)
         if self.contact_log is not None:
             self.contact_log.record(
