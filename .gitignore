@@ -43,3 +43,10 @@ models/*.onnx
 .idea/
 .vscode/
 *.swp
+
+# Agent tooling local state
+# .claude/agents/ and .claude/skills/ are shared and stay tracked; only the
+# per-machine session state below is ignored.
+.serena/
+.claude/settings.local.json
+.claude/.headroom_wrap_*
