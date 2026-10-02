@@ -145,22 +145,62 @@ def test_instant_alert_stay_sec_gating():
     tracker.update(p1, dog_det, [])
     assert tracker.pop_instant_alert() is None
 
-    # 2. Dog stays in zone at t=1.5s (0.5s stay < 1.0s) -> no alert yet
-    p2 = FramePacket(frame=frame, timestamp=1.5, frame_idx=2)
-    tracker.update(p2, dog_det, [])
-    assert tracker.pop_instant_alert() is None
+    # 2. Dog stays in zone, still short of instant_alert_stay_sec -> no alert yet
+    for idx, ts in enumerate((1.2, 1.4, 1.6, 1.8), start=2):
+        tracker.update(FramePacket(frame=frame, timestamp=ts, frame_idx=idx), dog_det, [])
+        assert tracker.pop_instant_alert() is None
 
     # 3. Dog stays in zone at t=2.0s (1.0s stay >= 1.0s) -> triggers alert!
-    p3 = FramePacket(frame=frame, timestamp=2.0, frame_idx=3)
+    #    The episode verdict needs MIN_VERDICT_FRAMES detections, so the frames
+    #    above are spaced to reach the stay threshold on the sixth one.
+    p3 = FramePacket(frame=frame, timestamp=2.0, frame_idx=6)
     tracker.update(p3, dog_det, [])
     alert_duration = tracker.pop_instant_alert()
     assert alert_duration is not None
     assert alert_duration >= 1.0
 
     # 4. Next frame in same event -> does NOT trigger again
-    p4 = FramePacket(frame=frame, timestamp=2.5, frame_idx=4)
+    p4 = FramePacket(frame=frame, timestamp=2.5, frame_idx=6)
     tracker.update(p4, dog_det, [])
     assert tracker.pop_instant_alert() is None
+
+
+def _telemetry(margin: float):
+    """One frame's telemetry carrying only the contact margin the verdict reads."""
+    from src.detector.zone_tracker import EventStatus, FrameTelemetry
+
+    return FrameTelemetry(EventStatus.ACTIVE, True, 0.5, (2,), (), 30, margin=margin)
+
+
+def _verdict_for(margins):
+    tracker = ZoneTracker(polygon=[(164, 201), (299, 271), (438, 211), (289, 164)], fps=15)
+    tracker._current_event_telemetry = [_telemetry(m) for m in margins]
+    return tracker.episode_verdict()
+
+
+def test_episode_verdict_rejects_a_box_that_sweeps_past():
+    """The pass-by shape: a large positive margin, held almost constant.
+
+    131 of the 192 hand-labelled events looked like this, and every one of them
+    passed the per-frame test on the frame its box crossed the pad.
+    """
+    assert _verdict_for([0.24, 0.26, 0.25, 0.27, 0.26, 0.25]) is False
+
+
+def test_episode_verdict_accepts_a_dog_standing_on_the_pad():
+    assert _verdict_for([-0.42, -0.43, -0.41, -0.44, -0.42, -0.43]) is True
+
+
+def test_episode_verdict_accepts_a_dog_working_around_on_the_pad():
+    """The median alone would reject this; the spread is what saves it."""
+    margins = [0.5, 0.0, 0.5, 0.0, 0.5, 0.0]
+    assert sum(margins) / len(margins) > 0.16
+    assert _verdict_for(margins) is True
+
+
+def test_episode_verdict_holds_off_until_there_are_enough_frames():
+    """An unjudged episode is not a cleared one."""
+    assert _verdict_for([-0.42] * 4) is False
 
 
 def test_perspective_oversized_box_rejected():

@@ -25,9 +25,16 @@ class FrameTelemetry:
     tracked_ids: Tuple[int, ...]
     lost_remaining: Tuple[Tuple[int, int], ...]
     lost_buffer_total: int
-    # Contact metrics, measured for tuning and not yet part of the verdict.
+    # Contact metrics for the episode verdict below, plus the pose channel.
     margin: Optional[float] = None
     overlap: float = 0.0
+    class_id: int = -1
+
+
+# A median and a spread need a few samples before either means anything, and a
+# shorter episode has not been judged, not been cleared. Episodes that never
+# reach this many detected frames fail the verdict.
+MIN_VERDICT_FRAMES = 5
 
 
 @dataclass
@@ -38,6 +45,9 @@ class CompletedEvent:
     frames: List[FramePacket]
     detections: List[sv.Detections]
     telemetry: List[FrameTelemetry]
+    # Whether the episode's own geometry judged it a visit. False for signal
+    # clips, which no one should ever be alerted about.
+    is_visit: bool = False
 
 
 class ZoneTracker:
@@ -57,6 +67,8 @@ class ZoneTracker:
         max_box_area: float = 55000.0,
         max_box_width: float = 380.0,
         max_ground_margin: float = 0.10,
+        verdict_margin_max: float = 0.16,
+        verdict_margin_std_min: float = 0.12,
     ):
         self.polygon_np = np.array(polygon, dtype=np.int32)
         self.zone = sv.PolygonZone(
@@ -67,6 +79,8 @@ class ZoneTracker:
         self.max_box_area = max_box_area
         self.max_box_width = max_box_width
         self.max_ground_margin = max_ground_margin
+        self.verdict_margin_max = verdict_margin_max
+        self.verdict_margin_std_min = verdict_margin_std_min
         # Measured every frame, recorded to contact_log, and checked in verdict.
         self.pad_geometry = PadGeometry(self.zone.mask)
         self.contact_log = contact_log
@@ -138,6 +152,7 @@ class ZoneTracker:
             lost_buffer_total=self._lost_buffer_total(),
             margin=self.last_contact.margin if self.last_contact else None,
             overlap=self.last_contact.overlap if self.last_contact else 0.0,
+            class_id=self.last_contact.class_id if self.last_contact else -1,
         )
 
     @staticmethod
@@ -160,6 +175,32 @@ class ZoneTracker:
         self._current_event_frames.append(packet)
         self._current_event_detections.append(tracked_detections)
         self._current_event_telemetry.append(self.last_telemetry)
+
+    def episode_verdict(self) -> bool:
+        """Judge the visit so far as a whole, not one frame at a time.
+
+        ``_is_valid_contact`` asks whether *a* frame put the box on the pad,
+        and one such frame is all a pass-by needs: while the dog walks in front
+        of the pad its box crosses the pad's image position for a moment. The
+        depth lives in the episode instead. On 192 hand-labelled events the
+        median contact margin was -0.245 for real visits and +0.261 for
+        pass-bys, and its spread 0.169 against 0.048.
+
+        Either shape is a visit: a dog that stands on the pad (low median), or
+        one that works around on it (wide spread). A box sweeping past keeps a
+        large positive margin and an almost constant one. Measured 0.92 recall
+        at 0.60 precision, against 1.00 at 0.32 for alerting on every episode
+        the per-frame test accepts.
+        """
+        margins = [
+            t.margin for t in self._current_event_telemetry if t.margin is not None
+        ]
+        if len(margins) < MIN_VERDICT_FRAMES:
+            return False
+        return (
+            float(np.median(margins)) <= self.verdict_margin_max
+            or float(np.std(margins)) >= self.verdict_margin_std_min
+        )
 
     def _is_valid_contact(self, detections: sv.Detections, in_zone_mask: np.ndarray) -> bool:
         """Validate whether any in-zone detection meets perspective size and depth constraints."""
@@ -186,6 +227,7 @@ class ZoneTracker:
         packet: FramePacket,
         detections: sv.Detections,
         pre_buffer_frames: List[FramePacket],
+        diff_score: float = 0.0,
     ) -> Tuple[sv.Detections, bool, Optional[CompletedEvent]]:
         """Update tracker/zone; return (tracked_detections, in_zone, completed_event)."""
         tracked_detections = self.tracker.update_with_detections(detections)
@@ -204,6 +246,7 @@ class ZoneTracker:
                 ),
                 metrics=self.last_contact,
                 in_zone=dog_in_zone,
+                diff_score=diff_score,
             )
         self.last_telemetry = self._build_telemetry(packet, tracked_detections, dog_in_zone)
 
@@ -224,7 +267,14 @@ class ZoneTracker:
                 self.cooldown_counter = 0
             else:
                 stay_sec = (packet.timestamp - self.stay_start_time) if self.stay_start_time is not None else 0.0
-                if not self.instant_alert_triggered and stay_sec >= self.instant_alert_stay_sec:
+                # Long enough *and* judged a visit. Re-checked every frame until
+                # it holds, so a dog that only settles later still gets its
+                # alert rather than missing it at the one-second mark.
+                if (
+                    not self.instant_alert_triggered
+                    and stay_sec >= self.instant_alert_stay_sec
+                    and self.episode_verdict()
+                ):
                     self.instant_alert_pending = True
                     self.instant_alert_triggered = True
             self._record_frame(packet, tracked_detections)
@@ -237,6 +287,7 @@ class ZoneTracker:
                 self.cooldown_counter += 1
                 if self.cooldown_counter >= self.post_buffer_frames:
                     duration = (self.stay_end_time or packet.timestamp) - (self.stay_start_time or packet.timestamp)
+                    is_visit = self.episode_verdict()
                     if duration >= self.min_stay_duration_sec:
                         completed_event = CompletedEvent(
                             start_time=self.event_start_time or packet.timestamp,
@@ -245,12 +296,14 @@ class ZoneTracker:
                             frames=list(self._current_event_frames),
                             detections=list(self._current_event_detections),
                             telemetry=list(self._current_event_telemetry),
+                            is_visit=is_visit,
                         )
                         if self.contact_log is not None:
                             self.contact_log.record_event(
                                 completed_event.telemetry,
                                 completed_event.start_time,
                                 duration,
+                                visit=is_visit,
                             )
                     self.reset()
 

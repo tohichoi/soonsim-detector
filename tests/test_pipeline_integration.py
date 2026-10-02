@@ -46,14 +46,15 @@ def test_full_export_and_notify_dry_run(tmp_path: Path):
     p_enter = FramePacket(frame=frame.copy(), timestamp=1.5, frame_idx=5)
     tracker.update(p_enter, dog_det, pre_frames)
 
-    # Stay
-    p_stay = FramePacket(frame=frame.copy(), timestamp=1.6, frame_idx=6)
-    tracker.update(p_stay, dog_det, [])
+    # Stay. The episode verdict needs MIN_VERDICT_FRAMES detected frames before
+    # it will call this a visit, so the dog is held on the pad for five of them.
+    for i, ts in enumerate((1.6, 1.7, 1.8, 1.9, 2.0), start=6):
+        tracker.update(FramePacket(frame=frame.copy(), timestamp=ts, frame_idx=i), dog_det, [])
 
     # Exit
     completed_event = None
     for i in range(11):
-        p_exit = FramePacket(frame=frame.copy(), timestamp=1.7 + i * 0.1, frame_idx=7 + i)
+        p_exit = FramePacket(frame=frame.copy(), timestamp=2.1 + i * 0.1, frame_idx=12 + i)
         _, _, completed_event = tracker.update(p_exit, empty_det, [])
         if completed_event is not None:
             break
@@ -139,7 +140,7 @@ def test_a_signal_clip_is_still_transcoded_without_an_alert(tmp_path: Path, monk
     assert service.alerts_count == 0
 
 
-def _stub_service(tmp_path: Path, sent: list, dog_until: float = 2.0) -> SoonsimService:
+def _stub_service(tmp_path: Path, sent: list, dog_until: float = 2.9) -> SoonsimService:
     """Build a SoonsimService without running __init__, with the detector stubbed.
 
     The real tracker, annotator and exporter are kept so the export wiring is

@@ -29,6 +29,12 @@ class ZoneConfig(BaseModel):
     max_box_width: float = Field(default=380.0, ge=50.0, le=640.0)
     # Ground margin: (y1 - pad_bottom) / box_height. > 0 means nearer than pad.
     max_ground_margin: float = Field(default=0.10, ge=-1.0, le=1.0)
+    # Episode-level verdict. The per-frame check above accepts one frame, which
+    # is all a pass-by needs; these two describe the whole visit instead, and
+    # either a low median margin (standing on the pad) or a wide spread (working
+    # around on it) passes. Raise them to alert more, lower to alert less.
+    verdict_margin_max: float = Field(default=0.16, ge=-1.0, le=1.0)
+    verdict_margin_std_min: float = Field(default=0.12, ge=0.0, le=1.0)
 
 
 class DetectorConfig(BaseModel):

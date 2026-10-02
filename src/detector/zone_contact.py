@@ -37,6 +37,11 @@ class ContactMetrics:
     pad_bottom: int
     margin: float   # (bottom_y - pad_bottom) / box_height; >0 means nearer than the pad
     overlap: float  # fraction of the pad's width at bottom_y that the bottom edge crosses
+    # Which animal the model called this box, and how sure it was. Class 77 is the
+    # curled "teddy bear" pose a squatting dog falls into, so the share of a visit
+    # spent in it is the pose channel the geometry above cannot see.
+    class_id: int = -1
+    confidence: float = 0.0
 
 
 class PadGeometry:
@@ -49,7 +54,9 @@ class PadGeometry:
         self.pad_bottom = int(rows.max()) if rows.size else 0
         self.row_width = mask.sum(axis=1)
 
-    def measure(self, box: Sequence[float]) -> Optional[ContactMetrics]:
+    def measure(
+        self, box: Sequence[float], class_id: int = -1, confidence: float = 0.0
+    ) -> Optional[ContactMetrics]:
         """Contact metrics for one box, or None when the box is degenerate."""
         x0, y0, x1, y1 = (int(round(float(v))) for v in box)
         height = y1 - y0
@@ -69,6 +76,8 @@ class PadGeometry:
             pad_bottom=self.pad_bottom,
             margin=(y1 - self.pad_bottom) / height,
             overlap=hits / pad_width if pad_width else 0.0,
+            class_id=class_id,
+            confidence=confidence,
         )
 
     def largest(self, detections) -> Optional[ContactMetrics]:
@@ -77,7 +86,14 @@ class PadGeometry:
             return None
         boxes = detections.xyxy
         areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-        return self.measure(boxes[int(np.argmax(areas))])
+        i = int(np.argmax(areas))
+        # Both are optional on the detections object, so a caller that only has
+        # boxes still gets geometry back rather than an exception.
+        class_id = int(detections.class_id[i]) if detections.class_id is not None else -1
+        confidence = (
+            float(detections.confidence[i]) if detections.confidence is not None else 0.0
+        )
+        return self.measure(boxes[i], class_id=class_id, confidence=confidence)
 
 
 class ZoneContactLog:
@@ -108,6 +124,7 @@ class ZoneContactLog:
         track_ids: Sequence[int],
         metrics: Optional[ContactMetrics],
         in_zone: bool,
+        diff_score: float = 0.0,
     ) -> None:
         """Write one frame. Frames without a detection are skipped."""
         if metrics is None:
@@ -123,18 +140,32 @@ class ZoneContactLog:
         row["box"] = list(row["box"])
         row["margin"] = round(row["margin"], 4)
         row["overlap"] = round(row["overlap"], 4)
+        row["cls"] = row.pop("class_id")
+        row["conf"] = round(row.pop("confidence"), 3)
+        # The gate's score lives in detection.log only for frames it chose to
+        # infer on. Beside the box it belongs to, it is a feature instead.
+        row["diff"] = round(diff_score, 3)
         self._write(row)
 
-    def record_event(self, telemetry: Sequence, start_time: float, duration_sec: float) -> None:
+    def record_event(
+        self,
+        telemetry: Sequence,
+        start_time: float,
+        duration_sec: float,
+        visit: bool = True,
+    ) -> None:
         """Write one summary line for a completed event.
 
         Per-frame lines are the raw record; this is the line to read when
         deciding where the thresholds belong, without opening the whole file.
+        ``visit`` is the verdict the detector reached, so a suppressed episode
+        can still be found here afterwards and argued with.
         """
         margins = [t.margin for t in telemetry if t.margin is not None]
         if not margins:
             return
         overlaps = [t.overlap for t in telemetry if t.margin is not None]
+        classes = [t.class_id for t in telemetry if t.margin is not None and t.class_id >= 0]
         self._write(
             {
                 "event": True,
@@ -143,10 +174,14 @@ class ZoneContactLog:
                 "frames": len(telemetry),
                 "det_frames": len(margins),
                 "verdict_frames": sum(1 for t in telemetry if t.in_zone),
+                "visit": bool(visit),
                 "margin_min": round(min(margins), 4),
                 "margin_med": round(float(np.median(margins)), 4),
+                "margin_std": round(float(np.std(margins)), 4),
                 "overlap_max": round(max(overlaps), 4),
                 "overlap_med": round(float(np.median(overlaps)), 4),
+                # Share of the visit spent curled, the pose a squatting dog holds.
+                "curled_share": round(classes.count(77) / len(classes), 3) if classes else 0.0,
             }
         )
 

@@ -90,6 +90,8 @@ class SoonsimService:
             max_box_area=self.config.zone.max_box_area,
             max_box_width=self.config.zone.max_box_width,
             max_ground_margin=self.config.zone.max_ground_margin,
+            verdict_margin_max=self.config.zone.verdict_margin_max,
+            verdict_margin_std_min=self.config.zone.verdict_margin_std_min,
         )
         self.annotator = HighContrastAnnotator(
             zone=self.tracker.zone,
@@ -221,7 +223,7 @@ class SoonsimService:
         is_active = (self.tracker.status == EventStatus.ACTIVE)
         is_in_event = self.tracker.status in (EventStatus.ACTIVE, EventStatus.COOLDOWN)
         detections, diff, is_signal = self._evaluate_detector(packet, is_in_event)
-        _, in_zone, completed = self.tracker.update(packet, detections, pre)
+        _, in_zone, completed = self.tracker.update(packet, detections, pre, diff_score=diff)
 
         telegram_cfg = getattr(self.config, "telegram", None)
         if telegram_cfg and getattr(telegram_cfg, "enabled", False) and getattr(telegram_cfg, "instant_alert_enabled", False):
@@ -231,7 +233,14 @@ class SoonsimService:
 
         if completed:
             self.ring_buffer.clear()
-            self._export_async(completed, prefix="soonsim", notify=True)
+            # Every episode is still exported, so nothing is lost for review;
+            # only the alert is withheld from the ones the verdict rejected.
+            self._export_async(completed, prefix="soonsim", notify=completed.is_visit)
+            if not completed.is_visit:
+                logger.info(
+                    f"Episode kept but not alerted: contact geometry read as a pass-by "
+                    f"({completed.duration_sec:.1f}s)."
+                )
 
         if self.signal_recorder is not None:
             unexplained = self.signal_recorder.observe(packet, detections, is_signal)
