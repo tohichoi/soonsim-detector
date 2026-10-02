@@ -2,7 +2,7 @@
 
 from pathlib import Path
 import sys
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 if sys.version_info >= (3, 11):
@@ -67,6 +67,11 @@ class TelegramConfig(BaseModel):
     enabled: bool = Field(default=False)
     bot_token: str = Field(default="")
     chat_id: str = Field(default="")
+    # Forum topic to post into. A forum supergroup rejects sends that omit it
+    # ("message thread not found"), so a topic destination needs this set to the
+    # topic id -- the middle number in a https://t.me/c/<chat>/<topic>/<msg> link.
+    # Leave unset for a private chat or a group without topics.
+    message_thread_id: Optional[int] = Field(default=None, ge=1)
     instant_alert_enabled: bool = Field(default=False)
     instant_alert_stay_sec: float = Field(default=1.0, ge=0.1, le=10.0)
 

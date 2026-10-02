@@ -20,6 +20,11 @@ class TelegramNotifier:
         if not self.is_active:
             logger.info("Telegram notifier disabled or missing credentials (Dry-run mode).")
 
+    def _thread(self) -> dict:
+        """Extra send kwargs for a forum topic destination, empty otherwise."""
+        thread_id = getattr(self.config, "message_thread_id", None)
+        return {"message_thread_id": thread_id} if thread_id else {}
+
     async def send_video_async(self, video_path: Path, stay_duration_sec: float, start_time: float) -> bool:
         """Send video asynchronously with structured caption."""
         if not video_path.exists():
@@ -45,6 +50,7 @@ class TelegramNotifier:
                     caption=caption,
                     write_timeout=60,
                     read_timeout=60,
+                    **self._thread(),
                 )
             logger.info(f"Successfully sent video notification to Telegram chat {self.config.chat_id}")
             return True
@@ -74,6 +80,7 @@ class TelegramNotifier:
                 caption=caption,
                 write_timeout=30,
                 read_timeout=30,
+                **self._thread(),
             )
             logger.info(f"Successfully sent instant entry photo to Telegram chat {self.config.chat_id}")
             return True
