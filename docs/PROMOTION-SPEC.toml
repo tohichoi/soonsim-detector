@@ -18,6 +18,11 @@ video_demo = "assets/detection_01_on_pad.mp4"
 pdf_report = ""
 
 [[participating_agents]]
+name = "Atlas"
+role = "Chief Strategy Officer"
+contribution = "엣지 AI 비전 감시 파이프라인 태스크 분석, 8인 에이전트 R&R 편성 및 2단계 절전형 감시 거버넌스 총괄"
+
+[[participating_agents]]
 name = "Leo"
 role = "System Architect"
 contribution = "2단계 절전형 감시 구조 및 파이프라인 인터페이스 설계, 감시 데몬·웹 뷰어 단일 프로세스 통합 아키텍처 수립"
@@ -54,9 +59,15 @@ contribution = "ngrok 영구 고정 도메인 보안 터널링 연동, PIN 잠�
 
 [[agent_flows]]
 source = "Mike"
+target = "Atlas"
+label = "비전 AI 감시 파이프라인 편성 지휘"
+type = "direction"
+
+[[agent_flows]]
+source = "Atlas"
 target = "Leo"
 label = "2단계 절전형 감시 구조 및 파이프라인 설계"
-type = "direction"
+type = "architecture"
 
 [[agent_flows]]
 source = "Leo"
